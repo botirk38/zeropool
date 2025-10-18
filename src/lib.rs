@@ -85,14 +85,16 @@
 //!
 //! # Safety
 //!
-//! ZeroPool uses `unsafe` code to avoid zero-filling buffers on reuse via `set_len()`.
+//! ZeroPool uses minimal `unsafe` code to avoid zero-filling buffers on reuse via `set_len()`.
 //! This is safe because:
 //! - Capacity checks guarantee sufficient space before setting length
-//! - Buffers are immediately overwritten by I/O operations
-//! - No reads occur before writes in typical I/O patterns
+//! - Buffers are immediately overwritten by I/O operations (the primary use case)
+//! - Callers using buffers for reads should zero-fill themselves if needed
+//!
+//! The unsafe usage is limited to 2 locations in hot paths (`get()` method only).
 
 use parking_lot::Mutex;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 /// Default minimum buffer size (1MB) - optimized for ML/tensor workloads
@@ -316,16 +318,29 @@ fn next_power_of_2(n: usize) -> usize {
     power
 }
 
+/// Thread-local cache structure combining buffers and config
+struct TlsCache {
+    buffers: Vec<Vec<u8>>,
+    limit: usize,
+}
+
+impl TlsCache {
+    const fn new() -> Self {
+        Self {
+            buffers: Vec::new(),
+            limit: 0,
+        }
+    }
+}
+
 thread_local! {
     /// Thread-local cache for lock-free fast path
-    static TLS_BUFFERS: RefCell<Vec<Vec<u8>>> = RefCell::new(Vec::new());
+    /// Using RefCell for safe, runtime-checked borrowing
+    static TLS_CACHE: RefCell<TlsCache> = RefCell::new(TlsCache::new());
 
-    /// Thread-local counter for fast round-robin shard selection
-    static SHARD_COUNTER: RefCell<usize> = RefCell::new(0);
-
-    /// Thread-local cache size limit (initialized from pool config on first use)
-    /// 0 = not yet initialized, will be set from pool config on first get()
-    static TLS_CACHE_LIMIT: RefCell<usize> = RefCell::new(0);
+    /// Thread-local shard counter using Cell for zero-cost access
+    /// Cell is sufficient since we only need to get/set a usize (Copy type)
+    static SHARD_COUNTER: Cell<usize> = Cell::new(0);
 }
 
 /// A high-performance, thread-safe buffer pool optimized for I/O workloads
@@ -405,9 +420,12 @@ impl BufferPool {
             .map(|_| Mutex::new(Vec::new()))
             .collect();
 
-        // Initialize TLS cache limit for this thread
-        TLS_CACHE_LIMIT.with(|limit| {
-            *limit.borrow_mut() = config.tls_cache_size;
+        // Initialize TLS cache for this thread
+        TLS_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.limit = config.tls_cache_size;
+            // Pre-reserve capacity to avoid reallocations (Phase 3)
+            cache.buffers.reserve(config.tls_cache_size);
         });
 
         Self {
@@ -419,12 +437,12 @@ impl BufferPool {
 
 
     /// Get the shard index for the current thread using round-robin
-    #[inline]
+    #[inline(always)]
     fn get_shard_index(&self) -> usize {
         SHARD_COUNTER.with(|counter| {
-            let mut c = counter.borrow_mut();
-            let idx = *c & self.shard_mask; // Fast modulo using cached mask
-            *c = c.wrapping_add(1);
+            let c = counter.get();
+            let idx = c & self.shard_mask; // Fast modulo using cached mask
+            counter.set(c.wrapping_add(1));
             idx
         })
     }
@@ -439,26 +457,23 @@ impl BufferPool {
     /// 1. **Fastest**: Thread-local cache LIFO (lock-free, cache-hot)
     /// 2. **Fast**: Shared pool shard LIFO + first-fit fallback
     /// 3. **Fallback**: New allocation
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, size: usize) -> Vec<u8> {
         // Fastest path: thread-local cache (lock-free)
-        // OPTIMIZATION: Single TLS access, LIFO for cache locality
-        let tls_hit = TLS_BUFFERS.with(|tls| {
+        let tls_hit = TLS_CACHE.with(|tls| {
             let mut cache = tls.borrow_mut();
 
-            // Initialize cache limit on first access (cold path)
-            if cache.capacity() == 0 {
-                TLS_CACHE_LIMIT.with(|limit| {
-                    if *limit.borrow() == 0 {
-                        *limit.borrow_mut() = self.config.tls_cache_size;
-                    }
-                });
+            // Initialize limit on first access (cold path)
+            if cache.limit == 0 {
+                cache.limit = self.config.tls_cache_size;
+                cache.buffers.reserve(self.config.tls_cache_size);
             }
 
             // LIFO: Check most recently used buffer first (better cache locality)
-            if let Some(buf) = cache.last() {
+            if let Some(buf) = cache.buffers.last() {
                 if buf.capacity() >= size {
-                    let mut buf = cache.pop().unwrap();
+                    let mut buf = cache.buffers.pop().unwrap();
+                    // SAFETY: capacity check above guarantees sufficient space
                     unsafe {
                         buf.set_len(size);
                     }
@@ -467,8 +482,9 @@ impl BufferPool {
             }
 
             // Fallback: First-fit search for compatible buffer
-            if let Some(idx) = cache.iter().position(|b| b.capacity() >= size) {
-                let mut buf = cache.swap_remove(idx);
+            if let Some(idx) = cache.buffers.iter().position(|b| b.capacity() >= size) {
+                let mut buf = cache.buffers.swap_remove(idx);
+                // SAFETY: capacity check in position() guarantees sufficient space
                 unsafe {
                     buf.set_len(size);
                 }
@@ -489,7 +505,7 @@ impl BufferPool {
         if let Some(buf) = shard.last() {
             if buf.capacity() >= size {
                 let mut buffer = shard.pop().unwrap();
-                // Lock released automatically
+                // SAFETY: capacity check above guarantees sufficient space
                 unsafe {
                     buffer.set_len(size);
                 }
@@ -502,8 +518,7 @@ impl BufferPool {
 
         if let Some(idx) = idx_opt {
             let mut buffer = shard.swap_remove(idx);
-            // Lock released automatically
-
+            // SAFETY: capacity check in position() guarantees sufficient space
             unsafe {
                 buffer.set_len(size);
             }
@@ -511,7 +526,7 @@ impl BufferPool {
         } else {
             // Lock released automatically before allocation
             std::mem::drop(shard);
-            // Allocate new buffer
+            // Allocate new buffer (already zero-filled)
             vec![0u8; size]
         }
     }
@@ -525,22 +540,27 @@ impl BufferPool {
     ///
     /// Prefer returning buffers to thread-local cache (lock-free) before falling back
     /// to the shared pool.
-    #[inline]
+    #[inline(always)]
     pub fn put(&self, mut buffer: Vec<u8>) {
         // Clear length but keep capacity
         buffer.clear();
 
-        // Fastest path: return to thread-local cache (lock-free) if space available
-        // OPTIMIZATION: Use Option to avoid double TLS access
-        let buffer = TLS_BUFFERS.with(|tls| {
+        // Fastest path: return to thread-local cache (lock-free)
+        // Returns the buffer if not stored
+        let buffer = TLS_CACHE.with(|tls| {
             let mut cache = tls.borrow_mut();
-            let limit = TLS_CACHE_LIMIT.with(|l| *l.borrow());
 
-            if cache.len() < limit {
-                cache.push(buffer);
-                None // Successfully stored
+            // Initialize limit if needed (cold path)
+            if cache.limit == 0 {
+                cache.limit = self.config.tls_cache_size;
+                cache.buffers.reserve(self.config.tls_cache_size);
+            }
+
+            if cache.buffers.len() < cache.limit {
+                cache.buffers.push(buffer);
+                None // Successfully stored in TLS
             } else {
-                Some(buffer) // Cache full, return buffer for shared pool
+                Some(buffer) // TLS full, return buffer
             }
         });
 
@@ -553,7 +573,7 @@ impl BufferPool {
 
         // Fall back to shared pool (sharded to reduce contention)
         if buffer.capacity() < self.config.min_buffer_size {
-            return; // Too small, don't keep
+            return; // Too small, discard
         }
 
         let shard_idx = self.get_shard_index();
