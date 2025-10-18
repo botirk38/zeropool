@@ -1,0 +1,28 @@
+[package]
+name = "zeropool"
+version = "0.1.0"
+edition = "2024"
+authors = ["Botir Khaltaev"]
+description = "A high-performance, zero-overhead buffer pool for Rust with 70% faster I/O through lock-free thread-local caching"
+repository = "https://github.com/botir-khaltaev/PROJECT"
+license = "MIT OR Apache-2.0"
+keywords = ["buffer", "pool", "io", "performance", "zero-copy"]
+categories = ["memory-management", "data-structures"]
+readme = "README.md"
+
+[dependencies]
+parking_lot = "0.12.5"
+
+[dev-dependencies]
+criterion = "0.7"
+sharded-slab = "0.1"
+bytes = "1.5"
+lifeguard = "0.6"
+deadpool = "0.12"
+tokio = { version = "1", features = ["rt", "macros"] }
+object-pool = "0.6"
+mempool = "0.3"
+
+[[bench]]
+name = "pool_comparison"
+harness = false
