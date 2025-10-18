@@ -102,7 +102,7 @@ use std::sync::Arc;
 const DEFAULT_MIN_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Calculate optimal TLS cache size based on system CPU count
-/// 
+///
 /// Lower core counts indicate fewer concurrent threads, so smaller cache is sufficient.
 /// Higher core counts indicate more parallelism and benefit from larger TLS cache.
 ///
@@ -160,18 +160,26 @@ fn calculate_num_shards(num_cpus: usize) -> usize {
 /// - 64+ cores → 64 buffers/shard (max)
 const fn calculate_max_buffers_per_shard(num_cpus: usize) -> usize {
     let base = 16;
-    let scaling = if num_cpus < 8 { 1 } else if num_cpus < 16 { 1 } else if num_cpus < 24 { 2 } else if num_cpus < 32 { 3 } else { 4 };
+    let scaling = if num_cpus < 16 {
+        1
+    } else if num_cpus < 24 {
+        2
+    } else if num_cpus < 32 {
+        3
+    } else {
+        4
+    };
     base * scaling
 }
 
 /// Configuration for buffer pool behavior
 ///
 /// This allows fine-tuning of the pool's characteristics based on workload.
-/// 
+///
 /// # System-Aware Defaults
-/// 
+///
 /// The default configuration automatically adapts to your system:
-/// 
+///
 /// | System | Cores | TLS Cache | Shards | Buffers/Shard | Total Capacity |
 /// |--------|-------|-----------|--------|---------------|----------------|
 /// | Embedded (RPi) | 4 | 4 | 4 | 16 | 64 (~64MB) |
@@ -185,15 +193,15 @@ pub struct PoolConfig {
     /// Number of shards in the global pool (computed from CPU count)
     /// Power of 2 for fast modulo operations, clamped to [4, 64]
     pub num_shards: usize,
-    
+
     /// Number of buffers to keep in thread-local cache per thread
     /// Higher values reduce shared pool access but increase per-thread memory
     pub tls_cache_size: usize,
-    
+
     /// Maximum buffers to keep per shard
     /// Total pool capacity = num_shards × max_buffers_per_shard
     pub max_buffers_per_shard: usize,
-    
+
     /// Minimum buffer size to keep in pool (smaller buffers are discarded)
     pub min_buffer_size: usize,
 }
@@ -204,26 +212,26 @@ impl PoolConfig {
         self.tls_cache_size = size;
         self
     }
-    
+
     /// Set the minimum buffer size to keep in pool
     pub fn with_min_buffer_size(mut self, size: usize) -> Self {
         self.min_buffer_size = size;
         self
     }
-    
+
     /// Set the maximum number of buffers per shard
     pub fn with_max_buffers_per_shard(mut self, count: usize) -> Self {
         self.max_buffers_per_shard = count;
         self
     }
-    
+
     /// Explicitly set the number of shards (overrides CPU-based default)
     /// Will be rounded up to next power of 2 and clamped to [4, 128]
     pub fn with_num_shards(mut self, count: usize) -> Self {
         self.num_shards = next_power_of_2(count).clamp(4, 128);
         self
     }
-    
+
     /// Preset for ML/tensor workloads (large buffers, high throughput)
     ///
     /// - Large buffers (1MB minimum)
@@ -231,42 +239,45 @@ impl PoolConfig {
     /// - Optimized for sequential large reads/writes
     pub fn for_ml_workload() -> Self {
         let mut config = Self::default();
-        config.min_buffer_size = 1024 * 1024;  // 1MB
+        config.min_buffer_size = 1024 * 1024; // 1MB
         config.tls_cache_size = config.tls_cache_size.max(8);
         config
     }
-    
+
     /// Preset for network I/O workloads (small-medium buffers, low latency)
     ///
     /// - Smaller buffers (64KB minimum)
     /// - Moderate TLS cache
     /// - Optimized for many concurrent connections
     pub fn for_network_io() -> Self {
-        let mut config = Self::default();
-        config.min_buffer_size = 64 * 1024;  // 64KB
-        config
+        Self {
+            min_buffer_size: 64 * 1024,
+            ..Default::default()
+        }
     }
-    
+
     /// Preset for file I/O workloads (medium buffers, balanced)
     ///
     /// - Medium buffers (256KB minimum)
     /// - Standard TLS cache
     /// - Balanced for mixed sequential/random access
     pub fn for_file_io() -> Self {
-        let mut config = Self::default();
-        config.min_buffer_size = 256 * 1024;  // 256KB
-        config
+        Self {
+            min_buffer_size: 256 * 1024,
+            ..Default::default()
+        }
     }
-    
+
     /// Preset for mixed workloads (balanced configuration)
     ///
     /// - Small-medium buffers (128KB minimum)
     /// - Standard TLS cache
     /// - Good all-around performance
     pub fn balanced() -> Self {
-        let mut config = Self::default();
-        config.min_buffer_size = 128 * 1024;  // 128KB
-        config
+        Self {
+            min_buffer_size: 128 * 1024,
+            ..Default::default()
+        }
     }
 }
 
@@ -295,7 +306,7 @@ impl Default for PoolConfig {
         let num_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        
+
         Self {
             num_shards: calculate_num_shards(num_cpus),
             tls_cache_size: calculate_default_tls_cache_size(num_cpus),
@@ -336,11 +347,11 @@ impl TlsCache {
 thread_local! {
     /// Thread-local cache for lock-free fast path
     /// Using RefCell for safe, runtime-checked borrowing
-    static TLS_CACHE: RefCell<TlsCache> = RefCell::new(TlsCache::new());
+    static TLS_CACHE: RefCell<TlsCache> = const { RefCell::new(TlsCache::new()) };
 
     /// Thread-local shard counter using Cell for zero-cost access
     /// Cell is sufficient since we only need to get/set a usize (Copy type)
-    static SHARD_COUNTER: Cell<usize> = Cell::new(0);
+    static SHARD_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
 /// A high-performance, thread-safe buffer pool optimized for I/O workloads
@@ -401,7 +412,7 @@ impl BufferPool {
     pub fn new() -> Self {
         Self::with_config(PoolConfig::default())
     }
-    
+
     /// Create a pool with custom configuration
     ///
     /// # Example
@@ -434,7 +445,6 @@ impl BufferPool {
             config,
         }
     }
-
 
     /// Get the shard index for the current thread using round-robin
     #[inline(always)]
@@ -470,15 +480,15 @@ impl BufferPool {
             }
 
             // LIFO: Check most recently used buffer first (better cache locality)
-            if let Some(buf) = cache.buffers.last() {
-                if buf.capacity() >= size {
-                    let mut buf = cache.buffers.pop().unwrap();
-                    // SAFETY: capacity check above guarantees sufficient space
-                    unsafe {
-                        buf.set_len(size);
-                    }
-                    return Some(buf);
+            if let Some(buf) = cache.buffers.last()
+                && buf.capacity() >= size
+            {
+                let mut buf = cache.buffers.pop().unwrap();
+                // SAFETY: capacity check above guarantees sufficient space
+                unsafe {
+                    buf.set_len(size);
                 }
+                return Some(buf);
             }
 
             // Fallback: First-fit search for compatible buffer
@@ -502,15 +512,15 @@ impl BufferPool {
         let mut shard = self.shards[shard_idx].lock();
 
         // LIFO: Try most recently returned buffer first (cache-hot)
-        if let Some(buf) = shard.last() {
-            if buf.capacity() >= size {
-                let mut buffer = shard.pop().unwrap();
-                // SAFETY: capacity check above guarantees sufficient space
-                unsafe {
-                    buffer.set_len(size);
-                }
-                return buffer;
+        if let Some(buf) = shard.last()
+            && buf.capacity() >= size
+        {
+            let mut buffer = shard.pop().unwrap();
+            // SAFETY: capacity check above guarantees sufficient space
+            unsafe {
+                buffer.set_len(size);
             }
+            return buffer;
         }
 
         // First-fit fallback: scan for compatible buffer
@@ -591,7 +601,7 @@ impl BufferPool {
     /// Useful for warming up the pool before high-throughput operations.
     /// Distributes buffers evenly across all shards.
     pub fn preallocate(&self, count: usize, size: usize) {
-        let per_shard = (count + self.config.num_shards - 1) / self.config.num_shards;
+        let per_shard = count.div_ceil(self.config.num_shards);
 
         for shard in self.shards.iter() {
             let mut buffers = shard.lock();
@@ -667,13 +677,13 @@ mod tests {
     #[test]
     fn test_min_size_filtering() {
         use std::thread;
-        
+
         let config = PoolConfig::default()
             .with_min_buffer_size(1024 * 1024)
             .with_max_buffers_per_shard(16);
         let pool = BufferPool::with_config(config.clone());
         let pool_clone = pool.clone();
-        
+
         // Test in separate thread to ensure clean TLS state
         thread::spawn(move || {
             // Fill TLS cache with small buffers
@@ -681,12 +691,14 @@ mod tests {
                 let buf = pool_clone.get(512);
                 pool_clone.put(buf);
             }
-            
+
             // Next small buffer should be rejected by shared pool (below min_size)
             let small_buf = pool_clone.get(512);
             pool_clone.put(small_buf);
-        }).join().unwrap();
-        
+        })
+        .join()
+        .unwrap();
+
         // Shared pool should be empty (small buffers don't meet min_size)
         assert_eq!(pool.len(), 0);
 
@@ -704,7 +716,9 @@ mod tests {
             for buf in buffers {
                 pool_clone.put(buf);
             }
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
 
         assert_eq!(pool.len(), 1);
     }
@@ -718,7 +732,7 @@ mod tests {
 
         // Fill TLS cache first, then overflow to shared pool across shards
         let mut buffers = Vec::new();
-        
+
         // Get enough buffers to fill TLS and multiple shards beyond their limits
         // tls_cache_size go to TLS, rest distributed across shards
         for _ in 0..(config.tls_cache_size + config.num_shards * 3) {
@@ -759,7 +773,7 @@ mod tests {
             let buf = pool.get(1024);
             assert_eq!(buf.len(), 1024);
         }
-        
+
         // Pool still empty since we consumed from TLS
         assert_eq!(pool.len(), 0);
     }
