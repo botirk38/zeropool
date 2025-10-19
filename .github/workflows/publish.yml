@@ -1,6 +1,13 @@
 name: Publish
 
 on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Perform a dry run (do not publish)'
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*.*.*'
@@ -21,4 +28,5 @@ jobs:
         run: cargo publish --dry-run
 
       - name: Publish to crates.io
+        if: ${{ !inputs.dry-run }}
         run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
