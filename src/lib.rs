@@ -339,10 +339,10 @@ fn pin_buffer(buffer: &[u8]) {
     if buffer.is_empty() {
         return;
     }
-    
-    let ptr = buffer.as_ptr() as *const u8;
+
+    let ptr = buffer.as_ptr();
     let len = buffer.len();
-    
+
     let _ = region::lock(ptr, len);
 }
 
@@ -659,7 +659,7 @@ impl BufferPool {
         let mut all_buffers: Vec<Vec<u8>> = Vec::with_capacity(total_to_allocate);
         for _ in 0..total_to_allocate {
             let mut buf = Vec::with_capacity(size.max(self.config.min_buffer_size));
-            
+
             // Pin buffer memory if enabled
             if self.config.pinned_memory {
                 // Need to set length temporarily for pinning
@@ -667,7 +667,7 @@ impl BufferPool {
                 pin_buffer(&buf);
                 buf.clear();
             }
-            
+
             all_buffers.push(buf);
         }
 

@@ -351,9 +351,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
     let size = 1024 * 1024; // 1MB buffers
 
     group.bench_function("unpinned", |b| {
-        let pool = zeropool::BufferPool::builder()
-            .pinned_memory(false)
-            .build();
+        let pool = zeropool::BufferPool::builder().pinned_memory(false).build();
         b.iter(|| {
             let mut buf = pool.get(size);
             black_box(&mut buf);
@@ -362,9 +360,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
     });
 
     group.bench_function("pinned", |b| {
-        let pool = zeropool::BufferPool::builder()
-            .pinned_memory(true)
-            .build();
+        let pool = zeropool::BufferPool::builder().pinned_memory(true).build();
         b.iter(|| {
             let mut buf = pool.get(size);
             black_box(&mut buf);
@@ -373,9 +369,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
     });
 
     group.bench_function("pinned_preallocated", |b| {
-        let pool = zeropool::BufferPool::builder()
-            .pinned_memory(true)
-            .build();
+        let pool = zeropool::BufferPool::builder().pinned_memory(true).build();
         pool.preallocate(10, size);
         b.iter(|| {
             let mut buf = pool.get(size);
