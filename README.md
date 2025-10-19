@@ -71,22 +71,35 @@ Thread 1     Thread 2     Thread N
 ## Configuration
 
 ```rust
-use zeropool::{BufferPool, PoolConfig};
+use zeropool::BufferPool;
 
-let pool = BufferPool::with_config(
-    PoolConfig::default()
-        .with_tls_cache_size(8)           // Buffers per thread
-        .with_min_buffer_size(512 * 1024) // Keep buffers ≥ 512KB
-        .with_max_buffers_per_shard(32)   // Max pooled buffers
-        .with_num_shards(64)              // Override auto-detection
-);
+let pool = BufferPool::builder()
+    .tls_cache_size(8)               // Buffers per thread
+    .min_buffer_size(512 * 1024)     // Keep buffers ≥ 512KB
+    .max_buffers_per_shard(32)       // Max pooled buffers
+    .num_shards(16)                  // Override auto-detection
+    .build();
 ```
 
-**Defaults** (auto-configured):
-- Shards: Next power-of-2 ≥ CPU count (4-64 range)
-- TLS cache: 4 buffers per thread
+**Defaults** (auto-configured based on CPU count):
+- Shards: 4-128 (power-of-2, ~1 shard per 2 cores)
+- TLS cache: 2-8 buffers per thread
 - Min buffer size: 1MB
-- Max per shard: 16 buffers
+- Max per shard: 16-64 buffers
+
+### Memory Pinning
+
+Lock buffer memory in RAM to prevent swapping:
+
+```rust
+use zeropool::BufferPool;
+
+let pool = BufferPool::builder()
+    .pinned_memory(true)
+    .build();
+```
+
+Useful for high-performance computing, security-sensitive data, or real-time systems. May require elevated privileges on some systems. Falls back gracefully if pinning fails.
 
 ## Benchmarks
 
@@ -150,13 +163,13 @@ cargo bench
 
 ## Thread Safety
 
-```rust
-use std::sync::Arc;
+`BufferPool` is `Clone` and thread-safe:
 
-let pool = Arc::new(BufferPool::new());
+```rust
+let pool = BufferPool::new();
 
 for _ in 0..4 {
-    let pool = Arc::clone(&pool);
+    let pool = pool.clone();
     std::thread::spawn(move || {
         let buf = pool.get(1024);
         // Each thread gets its own TLS cache

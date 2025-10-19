@@ -1,6 +1,6 @@
-//! ZeroPool - A high-performance, zero-overhead buffer pool for Rust
+//! # ZeroPool - High-Performance Buffer Pool for Rust
 //!
-//! ZeroPool provides a thread-safe buffer pool optimized for high-throughput I/O workloads.
+//! `ZeroPool` provides a thread-safe buffer pool optimized for high-throughput I/O workloads.
 //! It achieves exceptional performance through:
 //!
 //! - **System-aware defaults**: Automatically adapts to CPU count and hardware topology
@@ -8,25 +8,25 @@
 //! - **Sharded global pool**: Reduces contention with CPU-scaled sharding (4-128 shards)
 //! - **Zero-copy operations**: Avoids unnecessary memory allocations and copies
 //! - **Smart buffer reuse**: First-fit allocation with configurable size limits
-//! - **Workload presets**: Optimized configurations for ML, network I/O, file I/O
+//! - **Optional memory pinning**: Lock pages in RAM to prevent swapping (requires `pinned` feature)
 //!
 //! # Performance
 //!
-//! In benchmarks with 500MB buffers, ZeroPool achieves:
+//! In benchmarks with 500MB buffers, `ZeroPool` achieves:
 //! - **70% faster** than no pooling (176ms → 52ms)
 //! - **3.36x speedup** through buffer reuse
 //! - **Lock-free** fast path for single-threaded workloads
 //! - **Scales automatically** from embedded systems to 128+ core servers
 //!
-//! # Example
+//! # Quick Start
 //!
 //! ```rust
 //! use zeropool::BufferPool;
 //!
-//! // Simple usage with smart defaults based on system CPU count
+//! // Create a pool with smart defaults
 //! let pool = BufferPool::new();
 //!
-//! // Get a buffer from the pool
+//! // Get a buffer
 //! let mut buffer = pool.get(1024 * 1024); // 1MB buffer
 //!
 //! // Use the buffer for I/O operations
@@ -36,39 +36,35 @@
 //! pool.put(buffer);
 //! ```
 //!
-//! # Advanced Configuration
+//! # Custom Configuration
 //!
-//! ## Workload Presets
-//!
-//! ```rust
-//! use zeropool::{BufferPool, PoolConfig};
-//!
-//! // For ML/tensor workloads (large buffers)
-//! let pool = BufferPool::with_config(PoolConfig::for_ml_workload());
-//!
-//! // For network I/O (small buffers, low latency)
-//! let pool = BufferPool::with_config(PoolConfig::for_network_io());
-//!
-//! // For file I/O (medium buffers)
-//! let pool = BufferPool::with_config(PoolConfig::for_file_io());
-//!
-//! // Balanced for mixed workloads
-//! let pool = BufferPool::with_config(PoolConfig::balanced());
-//! ```
-//!
-//! ## Custom Configuration
+//! Use the builder pattern for custom configuration:
 //!
 //! ```rust
-//! use zeropool::{BufferPool, PoolConfig};
+//! use zeropool::BufferPool;
 //!
-//! let config = PoolConfig::default()
-//!     .with_tls_cache_size(8)           // 8 buffers per thread
-//!     .with_min_buffer_size(512 * 1024) // Keep buffers >= 512KB
-//!     .with_max_buffers_per_shard(32)   // Up to 32 buffers per shard
-//!     .with_num_shards(64);             // Override CPU-based default
-//!
-//! let pool = BufferPool::with_config(config);
+//! let pool = BufferPool::builder()
+//!     .min_buffer_size(512 * 1024)      // Keep buffers >= 512KB
+//!     .tls_cache_size(8)                // 8 buffers per thread
+//!     .max_buffers_per_shard(32)        // Up to 32 buffers per shard
+//!     .num_shards(16)                   // Override CPU-based default
+//!     .build();
 //! ```
+//!
+//! # Memory Pinning
+//!
+//! Lock buffer memory in RAM to prevent swapping:
+//!
+//! ```rust
+//! use zeropool::BufferPool;
+//!
+//! let pool = BufferPool::builder()
+//!     .pinned_memory(true)
+//!     .build();
+//! ```
+//!
+//! Useful for high-performance computing, security-sensitive data, or real-time systems.
+//! May require elevated privileges. Falls back gracefully if pinning fails.
 //!
 //! # System-Aware Scaling
 //!
@@ -172,113 +168,116 @@ const fn calculate_max_buffers_per_shard(num_cpus: usize) -> usize {
     base * scaling
 }
 
-/// Configuration for buffer pool behavior
+/// Builder for configuring a `BufferPool`
 ///
-/// This allows fine-tuning of the pool's characteristics based on workload.
+/// Follows the idiomatic Rust builder pattern. Use `BufferPool::builder()` to create.
 ///
-/// # System-Aware Defaults
+/// # Example
+/// ```
+/// use zeropool::BufferPool;
 ///
-/// The default configuration automatically adapts to your system:
-///
-/// | System | Cores | TLS Cache | Shards | Buffers/Shard | Total Capacity |
-/// |--------|-------|-----------|--------|---------------|----------------|
-/// | Embedded (RPi) | 4 | 4 | 4 | 16 | 64 (~64MB) |
-/// | Laptop | 8 | 6 | 8 | 16 | 128 (~128MB) |
-/// | Workstation | 16 | 6 | 8 | 32 | 256 (~256MB) |
-/// | Small Server | 32 | 8 | 16 | 64 | 1024 (~1GB) |
-/// | Large Server | 64 | 8 | 32 | 64 | 2048 (~2GB) |
-/// | Supercompute | 128 | 8 | 64 | 64 | 4096 (~4GB) |
-#[derive(Debug, Clone)]
-pub struct PoolConfig {
-    /// Number of shards in the global pool (computed from CPU count)
-    /// Power of 2 for fast modulo operations, clamped to [4, 64]
-    pub num_shards: usize,
-
-    /// Number of buffers to keep in thread-local cache per thread
-    /// Higher values reduce shared pool access but increase per-thread memory
-    pub tls_cache_size: usize,
-
-    /// Maximum buffers to keep per shard
-    /// Total pool capacity = num_shards × max_buffers_per_shard
-    pub max_buffers_per_shard: usize,
-
-    /// Minimum buffer size to keep in pool (smaller buffers are discarded)
-    pub min_buffer_size: usize,
+/// let pool = BufferPool::builder()
+///     .min_buffer_size(512 * 1024)  // 512KB minimum
+///     .num_shards(16)
+///     .build();
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct Builder {
+    num_shards: Option<usize>,
+    tls_cache_size: Option<usize>,
+    max_buffers_per_shard: Option<usize>,
+    min_buffer_size: Option<usize>,
+    pinned_memory: bool,
 }
 
-impl PoolConfig {
-    /// Set the number of buffers kept in thread-local cache
-    pub fn with_tls_cache_size(mut self, size: usize) -> Self {
-        self.tls_cache_size = size;
+impl Builder {
+    /// Set the minimum buffer size to keep in the pool
+    ///
+    /// Buffers smaller than this will be discarded when returned to the pool.
+    /// Default: 1MB (optimized for large I/O operations)
+    pub const fn min_buffer_size(mut self, size: usize) -> Self {
+        self.min_buffer_size = Some(size);
         self
     }
 
-    /// Set the minimum buffer size to keep in pool
-    pub fn with_min_buffer_size(mut self, size: usize) -> Self {
-        self.min_buffer_size = size;
+    /// Set the number of shards in the global pool
+    ///
+    /// More shards reduce lock contention in multi-threaded scenarios.
+    /// Will be rounded up to next power of 2 and clamped to [4, 128].
+    /// Default: Automatically calculated based on CPU count
+    pub fn num_shards(mut self, count: usize) -> Self {
+        self.num_shards = Some(count);
+        self
+    }
+
+    /// Set the number of buffers kept in thread-local cache per thread
+    ///
+    /// Higher values reduce shared pool access but increase per-thread memory usage.
+    /// Default: 2-8 based on CPU count
+    pub const fn tls_cache_size(mut self, size: usize) -> Self {
+        self.tls_cache_size = Some(size);
         self
     }
 
     /// Set the maximum number of buffers per shard
-    pub fn with_max_buffers_per_shard(mut self, count: usize) -> Self {
-        self.max_buffers_per_shard = count;
+    ///
+    /// Total pool capacity = num_shards × max_buffers_per_shard
+    /// Default: 16-64 based on CPU count
+    pub const fn max_buffers_per_shard(mut self, count: usize) -> Self {
+        self.max_buffers_per_shard = Some(count);
         self
     }
 
-    /// Explicitly set the number of shards (overrides CPU-based default)
-    /// Will be rounded up to next power of 2 and clamped to [4, 128]
-    pub fn with_num_shards(mut self, count: usize) -> Self {
-        self.num_shards = next_power_of_2(count).clamp(4, 128);
+    /// Enable memory pinning to prevent buffer pages from being swapped to disk
+    ///
+    /// When enabled, buffer memory will be locked in RAM using `mlock()`.
+    /// Useful for high-performance computing, security-sensitive data, or real-time systems.
+    ///
+    /// May require elevated privileges or ulimit adjustments.
+    /// Falls back gracefully if pinning fails (with a warning).
+    ///
+    /// Default: false
+    pub const fn pinned_memory(mut self, enabled: bool) -> Self {
+        self.pinned_memory = enabled;
         self
     }
 
-    /// Preset for ML/tensor workloads (large buffers, high throughput)
+    /// Build the `BufferPool` with the configured settings
     ///
-    /// - Large buffers (1MB minimum)
-    /// - Generous TLS cache (8 buffers)
-    /// - Optimized for sequential large reads/writes
-    pub fn for_ml_workload() -> Self {
-        let mut config = Self::default();
-        config.min_buffer_size = 1024 * 1024; // 1MB
-        config.tls_cache_size = config.tls_cache_size.max(8);
-        config
-    }
+    /// Any settings not explicitly set will use sensible system-aware defaults.
+    pub fn build(self) -> BufferPool {
+        let num_cpus = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(4);
 
-    /// Preset for network I/O workloads (small-medium buffers, low latency)
-    ///
-    /// - Smaller buffers (64KB minimum)
-    /// - Moderate TLS cache
-    /// - Optimized for many concurrent connections
-    pub fn for_network_io() -> Self {
-        Self {
-            min_buffer_size: 64 * 1024,
-            ..Default::default()
-        }
-    }
+        let config = PoolConfig {
+            num_shards: self
+                .num_shards
+                .map(|n| next_power_of_2(n).clamp(4, 128))
+                .unwrap_or_else(|| calculate_num_shards(num_cpus)),
+            tls_cache_size: self
+                .tls_cache_size
+                .unwrap_or_else(|| calculate_default_tls_cache_size(num_cpus)),
+            max_buffers_per_shard: self
+                .max_buffers_per_shard
+                .unwrap_or_else(|| calculate_max_buffers_per_shard(num_cpus)),
+            min_buffer_size: self.min_buffer_size.unwrap_or(DEFAULT_MIN_BUFFER_SIZE),
+            pinned_memory: self.pinned_memory,
+        };
 
-    /// Preset for file I/O workloads (medium buffers, balanced)
-    ///
-    /// - Medium buffers (256KB minimum)
-    /// - Standard TLS cache
-    /// - Balanced for mixed sequential/random access
-    pub fn for_file_io() -> Self {
-        Self {
-            min_buffer_size: 256 * 1024,
-            ..Default::default()
-        }
+        BufferPool::with_config(config)
     }
+}
 
-    /// Preset for mixed workloads (balanced configuration)
-    ///
-    /// - Small-medium buffers (128KB minimum)
-    /// - Standard TLS cache
-    /// - Good all-around performance
-    pub fn balanced() -> Self {
-        Self {
-            min_buffer_size: 128 * 1024,
-            ..Default::default()
-        }
-    }
+
+/// Internal configuration for buffer pool (not part of public API)
+#[derive(Debug, Clone)]
+struct PoolConfig {
+    num_shards: usize,
+    tls_cache_size: usize,
+    max_buffers_per_shard: usize,
+    min_buffer_size: usize,
+    pinned_memory: bool,
 }
 
 impl Default for PoolConfig {
@@ -304,7 +303,7 @@ impl Default for PoolConfig {
     /// - `PoolConfig::balanced()`
     fn default() -> Self {
         let num_cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(4);
 
         Self {
@@ -312,13 +311,14 @@ impl Default for PoolConfig {
             tls_cache_size: calculate_default_tls_cache_size(num_cpus),
             max_buffers_per_shard: calculate_max_buffers_per_shard(num_cpus),
             min_buffer_size: DEFAULT_MIN_BUFFER_SIZE,
+            pinned_memory: false,
         }
     }
 }
 
 /// Round up to next power of 2
 #[inline]
-fn next_power_of_2(n: usize) -> usize {
+const fn next_power_of_2(n: usize) -> usize {
     if n == 0 {
         return 1;
     }
@@ -327,6 +327,29 @@ fn next_power_of_2(n: usize) -> usize {
         power <<= 1;
     }
     power
+}
+
+/// Pin a buffer's memory to prevent it from being swapped to disk
+///
+/// Uses `mlock()` to lock pages in RAM. Falls back gracefully if pinning fails.
+#[inline]
+fn pin_buffer(buffer: &[u8]) -> bool {
+    if buffer.is_empty() {
+        return true;
+    }
+
+    let ptr = buffer.as_ptr();
+    let len = buffer.len();
+
+    // Lock the memory region
+    match region::lock(ptr, len) {
+        Ok(_) => true,
+        Err(e) => {
+            // Log warning but don't fail - pinning is best-effort
+            eprintln!("Warning: Failed to pin buffer memory: {e}. Continuing without pinning.");
+            false
+        }
+    }
 }
 
 /// Thread-local cache structure combining buffers and config
@@ -394,7 +417,7 @@ thread_local! {
 #[derive(Clone)]
 pub struct BufferPool {
     shards: Arc<Vec<Mutex<Vec<Vec<u8>>>>>,
-    pub config: PoolConfig,
+    config: PoolConfig,
     /// Cached mask for fast shard selection (num_shards - 1)
     shard_mask: usize,
 }
@@ -402,40 +425,73 @@ pub struct BufferPool {
 impl BufferPool {
     /// Create a new buffer pool with system-aware defaults
     ///
-    /// The pool automatically configures itself based on:
-    /// - CPU count (determines number of shards)
-    /// - Conservative memory usage (4 buffers per thread)
+    /// The pool automatically configures itself based on CPU count:
+    /// - Number of shards (4-128, reduces lock contention)
+    /// - Thread-local cache size (2-8 buffers per thread)
+    /// - Max buffers per shard (16-64)
     /// - 1MB minimum buffer size
     ///
-    /// For most workloads, these defaults provide excellent performance.
+    /// # Example
+    /// ```
+    /// use zeropool::BufferPool;
+    ///
+    /// let pool = BufferPool::new();
+    /// let buffer = pool.get(1024 * 1024);
+    /// // ... use buffer ...
+    /// pool.put(buffer);
+    /// ```
     #[inline]
     pub fn new() -> Self {
-        Self::with_config(PoolConfig::default())
+        Builder::default().build()
     }
 
-    /// Create a pool with custom configuration
+    /// Create a builder for custom configuration
+    ///
+    /// Use this when you need to customize the pool behavior.
     ///
     /// # Example
-    ///
     /// ```
-    /// use zeropool::{BufferPool, PoolConfig};
+    /// use zeropool::BufferPool;
     ///
-    /// let config = PoolConfig::default()
-    ///     .with_tls_cache_size(8)
-    ///     .with_max_buffers_per_shard(32);
-    ///
-    /// let pool = BufferPool::with_config(config);
+    /// let pool = BufferPool::builder()
+    ///     .min_buffer_size(512 * 1024)  // 512KB minimum
+    ///     .num_shards(16)
+    ///     .build();
     /// ```
-    pub fn with_config(config: PoolConfig) -> Self {
-        let shards = (0..config.num_shards)
-            .map(|_| Mutex::new(Vec::new()))
+    #[inline]
+    pub fn builder() -> Builder {
+        Builder::default()
+    }
+
+    /// Create a pool with explicit configuration (internal use)
+    fn with_config(config: PoolConfig) -> Self {
+        let shards: Vec<Mutex<Vec<Vec<u8>>>> = (0..config.num_shards)
+            .map(|_| {
+                let mut buffers = Vec::new();
+
+                // Pre-allocate and pin initial buffers if pinned memory is enabled
+                if config.pinned_memory {
+                    // Pre-allocate a reasonable number of buffers per shard
+                    let initial_buffers = (config.max_buffers_per_shard / 2).max(4);
+                    buffers.reserve(config.max_buffers_per_shard);
+
+                    for _ in 0..initial_buffers {
+                        let mut buffer = vec![0; config.min_buffer_size];
+                        pin_buffer(&buffer);
+                        buffer.clear(); // Clear but keep capacity and pinning
+                        buffers.push(buffer);
+                    }
+                }
+
+                Mutex::new(buffers)
+            })
             .collect();
 
         // Initialize TLS cache for this thread
         TLS_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             cache.limit = config.tls_cache_size;
-            // Pre-reserve capacity to avoid reallocations (Phase 3)
+            // Pre-reserve capacity to avoid reallocations
             cache.buffers.reserve(config.tls_cache_size);
         });
 
@@ -447,7 +503,7 @@ impl BufferPool {
     }
 
     /// Get the shard index for the current thread using round-robin
-    #[inline(always)]
+    #[inline]
     fn get_shard_index(&self) -> usize {
         SHARD_COUNTER.with(|counter| {
             let c = counter.get();
@@ -467,7 +523,13 @@ impl BufferPool {
     /// 1. **Fastest**: Thread-local cache LIFO (lock-free, cache-hot)
     /// 2. **Fast**: Shared pool shard LIFO + first-fit fallback
     /// 3. **Fallback**: New allocation
-    #[inline(always)]
+    ///
+    /// # Panics
+    ///
+    /// This method may panic if internal invariants are violated (buffer found but cannot be removed).
+    /// In practice, this should never occur under normal usage.
+    #[inline]
+    #[must_use]
     pub fn get(&self, size: usize) -> Vec<u8> {
         // Fastest path: thread-local cache (lock-free)
         let tls_hit = TLS_CACHE.with(|tls| {
@@ -537,6 +599,7 @@ impl BufferPool {
             // Lock released automatically before allocation
             std::mem::drop(shard);
             // Allocate new buffer (already zero-filled)
+            // Will be pinned when returned to pool if pinned_memory is enabled
             vec![0u8; size]
         }
     }
@@ -550,7 +613,12 @@ impl BufferPool {
     ///
     /// Prefer returning buffers to thread-local cache (lock-free) before falling back
     /// to the shared pool.
-    #[inline(always)]
+    ///
+    /// # Panics
+    ///
+    /// This method may panic if the TLS cache is in an invalid state.
+    /// In practice, this should never occur under normal usage.
+    #[inline]
     pub fn put(&self, mut buffer: Vec<u8>) {
         // Clear length but keep capacity
         buffer.clear();
@@ -586,6 +654,19 @@ impl BufferPool {
             return; // Too small, discard
         }
 
+        // Pin buffer before adding to pool if enabled
+        let buffer = if self.config.pinned_memory && buffer.capacity() > 0 {
+            // Ensure buffer has actual allocated memory before pinning
+            let cap = buffer.capacity();
+            let mut buf = buffer;
+            buf.resize(cap, 0);
+            pin_buffer(&buf);
+            buf.clear(); // Clear but keep capacity and pinning
+            buf
+        } else {
+            buffer
+        };
+
         let shard_idx = self.get_shard_index();
         let mut shard = self.shards[shard_idx].lock();
 
@@ -607,7 +688,18 @@ impl BufferPool {
             let mut buffers = shard.lock();
             buffers.reserve(per_shard);
             for _ in 0..per_shard {
-                buffers.push(Vec::with_capacity(size.max(self.config.min_buffer_size)));
+                let buffer = {
+                    let mut buf = Vec::with_capacity(size.max(self.config.min_buffer_size));
+                    if self.config.pinned_memory && buf.capacity() > 0 {
+                        // Ensure buffer has actual allocated memory before pinning
+                        buf.resize(buf.capacity(), 0);
+                        pin_buffer(&buf);
+                        buf.clear();
+                    }
+                    buf
+                };
+
+                buffers.push(buffer);
             }
         }
     }
@@ -616,6 +708,7 @@ impl BufferPool {
     ///
     /// Note: Does not include thread-local cached buffers
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.shards.iter().map(|s| s.lock().len()).sum()
     }
@@ -624,6 +717,7 @@ impl BufferPool {
     ///
     /// Note: Does not check thread-local caches
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.shards.iter().all(|s| s.lock().is_empty())
     }
@@ -658,8 +752,7 @@ mod tests {
     #[test]
     fn test_buffer_sizing() {
         // Use small min_buffer_size so we can test buffer reuse with small buffers
-        let config = PoolConfig::default().with_min_buffer_size(0);
-        let pool = BufferPool::with_config(config);
+        let pool = BufferPool::builder().min_buffer_size(0).build();
 
         // Request larger buffer
         let buf = pool.get(2048);
@@ -678,16 +771,18 @@ mod tests {
     fn test_min_size_filtering() {
         use std::thread;
 
-        let config = PoolConfig::default()
-            .with_min_buffer_size(1024 * 1024)
-            .with_max_buffers_per_shard(16);
-        let pool = BufferPool::with_config(config.clone());
+        let pool = BufferPool::builder()
+            .min_buffer_size(1024 * 1024)
+            .max_buffers_per_shard(16)
+            .build();
+
+        let tls_cache_size = pool.config.tls_cache_size;
         let pool_clone = pool.clone();
 
         // Test in separate thread to ensure clean TLS state
         thread::spawn(move || {
             // Fill TLS cache with small buffers
-            for _ in 0..config.tls_cache_size {
+            for _ in 0..tls_cache_size {
                 let buf = pool_clone.get(512);
                 pool_clone.put(buf);
             }
@@ -704,15 +799,14 @@ mod tests {
 
         // Test with large buffers in another thread
         let pool_clone = pool.clone();
-        let cache_size = config.tls_cache_size;
         thread::spawn(move || {
             // Create tls_cache_size + 1 buffers
             let mut buffers = Vec::new();
-            for _ in 0..(cache_size + 1) {
+            for _ in 0..(tls_cache_size + 1) {
                 buffers.push(pool_clone.get(2 * 1024 * 1024));
             }
 
-            // Return them all - first cache_size go to TLS, last one to shared pool
+            // Return them all - first tls_cache_size go to TLS, last one to shared pool
             for buf in buffers {
                 pool_clone.put(buf);
             }
@@ -725,17 +819,20 @@ mod tests {
 
     #[test]
     fn test_max_pool_size() {
-        let config = PoolConfig::default()
-            .with_min_buffer_size(0)
-            .with_max_buffers_per_shard(2);
-        let pool = BufferPool::with_config(config.clone());
+        let pool = BufferPool::builder()
+            .min_buffer_size(0)
+            .max_buffers_per_shard(2)
+            .build();
+
+        let tls_cache_size = pool.config.tls_cache_size;
+        let num_shards = pool.config.num_shards;
 
         // Fill TLS cache first, then overflow to shared pool across shards
         let mut buffers = Vec::new();
 
         // Get enough buffers to fill TLS and multiple shards beyond their limits
         // tls_cache_size go to TLS, rest distributed across shards
-        for _ in 0..(config.tls_cache_size + config.num_shards * 3) {
+        for _ in 0..(tls_cache_size + num_shards * 3) {
             buffers.push(pool.get(1024));
         }
 
@@ -746,7 +843,7 @@ mod tests {
 
         // Each shard should have max 2 buffers (max_pool_size)
         // Total should be at most num_shards * 2
-        assert!(pool.len() <= config.num_shards * 2);
+        assert!(pool.len() <= num_shards * 2);
 
         // Verify each shard respects the limit
         for shard in pool.shards.iter() {
@@ -776,5 +873,194 @@ mod tests {
 
         // Pool still empty since we consumed from TLS
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn test_builder_api() {
+        // Test default builder
+        let pool1 = BufferPool::builder().build();
+        assert!(!pool1.is_empty() || pool1.is_empty()); // Just verify it compiles
+
+        // Test all builder methods
+        let pool2 = BufferPool::builder()
+            .min_buffer_size(256 * 1024)
+            .num_shards(8)
+            .tls_cache_size(4)
+            .max_buffers_per_shard(16)
+            .build();
+
+        assert_eq!(pool2.config.min_buffer_size, 256 * 1024);
+        assert_eq!(pool2.config.num_shards, 8);
+        assert_eq!(pool2.config.tls_cache_size, 4);
+        assert_eq!(pool2.config.max_buffers_per_shard, 16);
+
+        // Test that it actually works
+        let buf = pool2.get(512 * 1024);
+        assert_eq!(buf.len(), 512 * 1024);
+        pool2.put(buf);
+    }
+
+    #[test]
+    fn test_pinned_memory() {
+        // Test that pinned memory doesn't crash (may not actually pin without privileges)
+        let pool = BufferPool::builder().pinned_memory(true).build();
+
+        let buf = pool.get(1024 * 1024);
+        assert_eq!(buf.len(), 1024 * 1024);
+        pool.put(buf);
+
+        // Verify we can still use the pool normally
+        let buf2 = pool.get(512 * 1024);
+        assert_eq!(buf2.len(), 512 * 1024);
+    }
+
+    #[test]
+    fn test_concurrent_access() {
+        use std::thread;
+
+        let pool = BufferPool::new();
+        let mut handles = vec![];
+
+        // Spawn 8 threads doing concurrent get/put
+        for _ in 0..8 {
+            let pool = pool.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    let buf = pool.get(4096);
+                    assert_eq!(buf.len(), 4096);
+                    pool.put(buf);
+                }
+            }));
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Pool should still be functional
+        assert!(pool.len() < 1000); // Some buffers may be pooled
+    }
+
+    #[test]
+    fn test_clone_shares_state() {
+        let pool = BufferPool::builder()
+            .min_buffer_size(0)
+            .tls_cache_size(2)
+            .build();
+
+        // Get buffers in main thread to fill TLS cache
+        let buf1 = pool.get(1024);
+        let buf2 = pool.get(1024);
+        pool.put(buf1);
+        pool.put(buf2);
+
+        // Clone the pool
+        let pool_clone = pool.clone();
+
+        // Put a buffer in clone - should overflow to shared pool
+        let buf3 = pool_clone.get(2048);
+        let buf4 = pool_clone.get(2048);
+        let buf5 = pool_clone.get(2048);
+        pool_clone.put(buf3);
+        pool_clone.put(buf4);
+        pool_clone.put(buf5);
+
+        // Original pool should see buffers in shared pool
+        assert!(pool.len() > 0);
+    }
+
+    #[test]
+    fn test_preallocate() {
+        let pool = BufferPool::builder()
+            .min_buffer_size(512 * 1024)
+            .num_shards(4)
+            .build();
+
+        let initial_len = pool.len();
+
+        // Preallocate some buffers
+        pool.preallocate(10, 1024 * 1024);
+
+        // Pool should have more buffers now (distributed across shards)
+        assert!(pool.len() > initial_len);
+
+        // Should be able to get a preallocated buffer
+        let buf = pool.get(1024 * 1024);
+        assert!(buf.capacity() >= 1024 * 1024);
+    }
+
+    #[test]
+    fn test_edge_cases() {
+        use std::thread;
+
+        let pool = BufferPool::builder()
+            .tls_cache_size(2)
+            .min_buffer_size(0)
+            .build();
+
+        // Test is_empty on new pool
+        assert!(pool.is_empty());
+
+        // Test zero-size buffer
+        let buf_zero = pool.get(0);
+        assert_eq!(buf_zero.len(), 0);
+        pool.put(buf_zero);
+
+        // Test very large buffer - fill TLS cache first, then add more
+        let pool_clone = pool.clone();
+        thread::spawn(move || {
+            // Fill TLS cache
+            let b1 = pool_clone.get(1024);
+            let b2 = pool_clone.get(1024);
+            pool_clone.put(b1);
+            pool_clone.put(b2);
+
+            // This should overflow to shared pool
+            let buf_large = pool_clone.get(100 * 1024 * 1024); // 100MB
+            assert_eq!(buf_large.len(), 100 * 1024 * 1024);
+            pool_clone.put(buf_large);
+        })
+        .join()
+        .unwrap();
+
+        // Pool should have the large buffer now (in shared pool, not TLS)
+        assert!(!pool.is_empty());
+    }
+
+    #[test]
+    fn test_shard_distribution() {
+        use std::thread;
+
+        let pool = BufferPool::builder()
+            .num_shards(4)
+            .min_buffer_size(0)
+            .tls_cache_size(2)
+            .build();
+
+        // Put many buffers from separate thread to avoid TLS cache
+        let pool_clone = pool.clone();
+        thread::spawn(move || {
+            let mut buffers = vec![];
+            for _ in 0..20 {
+                buffers.push(pool_clone.get(1024));
+            }
+            for buf in buffers {
+                pool_clone.put(buf);
+            }
+        })
+        .join()
+        .unwrap();
+
+        // Buffers should be distributed across shards
+        let mut non_empty_shards = 0;
+        for shard in pool.shards.iter() {
+            if !shard.lock().is_empty() {
+                non_empty_shards += 1;
+            }
+        }
+
+        // Should have buffers in multiple shards (not all in one)
+        assert!(non_empty_shards >= 2);
     }
 }
