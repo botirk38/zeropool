@@ -269,7 +269,6 @@ impl Builder {
     }
 }
 
-
 /// Internal configuration for buffer pool (not part of public API)
 #[derive(Debug, Clone)]
 struct PoolConfig {
@@ -967,7 +966,7 @@ mod tests {
         pool_clone.put(buf5);
 
         // Original pool should see buffers in shared pool
-        assert!(pool.len() > 0);
+        assert!(!pool.is_empty());
     }
 
     #[test]
