@@ -149,17 +149,14 @@ fn calculate_num_shards(num_cpus: usize) -> usize {
 /// - 32 cores → 64 buffers/shard
 /// - 64+ cores → 64 buffers/shard (max)
 const fn calculate_max_buffers_per_shard(num_cpus: usize) -> usize {
-    let base = 16;
-    let scaling = if num_cpus < 16 {
-        1
-    } else if num_cpus < 24 {
-        2
-    } else if num_cpus < 32 {
-        3
-    } else {
-        4
+    const BASE: usize = 16;
+    let scaling = match num_cpus {
+        0..16 => 1,
+        16..24 => 2,
+        24..32 => 3,
+        _ => 4,
     };
-    base * scaling
+    BASE * scaling
 }
 
 /// Builder for configuring a `BufferPool`
@@ -189,7 +186,7 @@ impl Builder {
     ///
     /// Buffers smaller than this will be discarded when returned to the pool.
     /// Default: 1MB (optimized for large I/O operations)
-    pub const fn min_buffer_size(mut self, size: usize) -> Self {
+    pub fn min_buffer_size(mut self, size: usize) -> Self {
         self.min_buffer_size = Some(size);
         self
     }
@@ -208,7 +205,7 @@ impl Builder {
     ///
     /// Higher values reduce shared pool access but increase per-thread memory usage.
     /// Default: 2-8 based on CPU count
-    pub const fn tls_cache_size(mut self, size: usize) -> Self {
+    pub fn tls_cache_size(mut self, size: usize) -> Self {
         self.tls_cache_size = Some(size);
         self
     }
@@ -217,7 +214,7 @@ impl Builder {
     ///
     /// Total pool capacity = num_shards × max_buffers_per_shard
     /// Default: 16-64 based on CPU count
-    pub const fn max_buffers_per_shard(mut self, count: usize) -> Self {
+    pub fn max_buffers_per_shard(mut self, count: usize) -> Self {
         self.max_buffers_per_shard = Some(count);
         self
     }
@@ -230,7 +227,7 @@ impl Builder {
     /// Requires sufficient permissions (CAP_IPC_LOCK on Linux or similar).
     /// Falls back gracefully if pinning fails.
     /// Default: false
-    pub const fn pinned_memory(mut self, enabled: bool) -> Self {
+    pub fn pinned_memory(mut self, enabled: bool) -> Self {
         self.pinned_memory = Some(enabled);
         self
     }
@@ -238,22 +235,45 @@ impl Builder {
     /// Build the `BufferPool` with the configured settings
     ///
     /// Any settings not explicitly set will use sensible system-aware defaults.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tls_cache_size` is set to 0 or `max_buffers_per_shard` is set to 0.
     pub fn build(self) -> BufferPool {
         let num_cpus = std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(4);
 
+        let tls_cache_size = self
+            .tls_cache_size
+            .unwrap_or_else(|| calculate_default_tls_cache_size(num_cpus));
+
+        let max_buffers_per_shard = self
+            .max_buffers_per_shard
+            .unwrap_or_else(|| calculate_max_buffers_per_shard(num_cpus));
+
+        // Validate configuration
+        assert!(tls_cache_size > 0, "tls_cache_size must be greater than 0");
+        assert!(
+            max_buffers_per_shard > 0,
+            "max_buffers_per_shard must be greater than 0"
+        );
+
         let config = PoolConfig {
             num_shards: self
                 .num_shards
-                .map(|n| next_power_of_2(n).clamp(4, 128))
+                .map(|n| {
+                    let normalized = next_power_of_2(n).clamp(4, 128);
+                    // Verify it's a power of 2 after clamping
+                    debug_assert!(
+                        normalized.is_power_of_two(),
+                        "num_shards must be power of 2"
+                    );
+                    normalized
+                })
                 .unwrap_or_else(|| calculate_num_shards(num_cpus)),
-            tls_cache_size: self
-                .tls_cache_size
-                .unwrap_or_else(|| calculate_default_tls_cache_size(num_cpus)),
-            max_buffers_per_shard: self
-                .max_buffers_per_shard
-                .unwrap_or_else(|| calculate_max_buffers_per_shard(num_cpus)),
+            tls_cache_size,
+            max_buffers_per_shard,
             min_buffer_size: self.min_buffer_size.unwrap_or(DEFAULT_MIN_BUFFER_SIZE),
             pinned_memory: self.pinned_memory.unwrap_or(false),
         };
@@ -348,14 +368,12 @@ fn pin_buffer(buffer: &[u8]) {
 
 /// Thread-local cache structure combining buffers and config
 struct TlsCache {
-    limit: usize,
     buffers: Vec<Vec<u8>>,
 }
 
 impl TlsCache {
     const fn new() -> Self {
         Self {
-            limit: 0,
             buffers: Vec::new(),
         }
     }
@@ -366,9 +384,14 @@ thread_local! {
     /// Using RefCell for safe, runtime-checked borrowing
     static TLS_CACHE: RefCell<TlsCache> = const { RefCell::new(TlsCache::new()) };
 
-    /// Thread-local shard counter using Cell for zero-cost access
-    /// Cell is sufficient since we only need to get/set a usize (Copy type)
-    static SHARD_COUNTER: Cell<usize> = const { Cell::new(0) };
+    /// Thread-local limit for cache size
+    /// Using Cell for zero-cost access to avoid repeated initialization checks
+    static TLS_LIMIT: Cell<usize> = const { Cell::new(0) };
+
+    /// Thread-local preferred shard index for cache affinity
+    /// Each thread consistently uses the same shard for better cache locality
+    /// Initialized lazily using thread ID hash
+    static SHARD_AFFINITY: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 /// A high-performance, thread-safe buffer pool optimized for I/O workloads
@@ -393,19 +416,20 @@ thread_local! {
 /// Thread 1                Thread 2                Thread N
 /// ┌──────────┐           ┌──────────┐           ┌──────────┐
 /// │TLS Cache │           │TLS Cache │           │TLS Cache │
-/// │(4 bufs)  │           │(4 bufs)  │           │(4 bufs)  │
+/// │(2-8 bufs)│           │(2-8 bufs)│           │(2-8 bufs)│
 /// └────┬─────┘           └────┬─────┘           └────┬─────┘
+///      │(affinity)            │(affinity)            │(affinity)
 ///      │                      │                      │
 ///      └──────────┬───────────┴──────────────────────┘
 ///                 │
 ///         ┌───────▼────────┐
 ///         │  Shared Pool   │
-///         │  (N shards)    │
-///         │                │
-///         │ [Shard 0] ...  │  N = next_pow2(num_cpus)
-///         │ [Shard 1]      │  clamped to [4, 64]
-///         │ [Shard 2]      │
-///         │    ...         │
+///         │  (N shards)    │  Thread-local affinity:
+///         │                │  Each thread uses same
+///         │ [Shard 0] ...  │  shard for cache locality
+///         │ [Shard 1]      │
+///         │ [Shard 2]      │  N = next_pow2(num_cpus/2)
+///         │    ...         │  clamped to [4, 128]
 ///         └────────────────┘
 /// ```
 #[derive(Clone)]
@@ -465,12 +489,9 @@ impl BufferPool {
             .map(|_| Mutex::new(Vec::new()))
             .collect();
 
-        // Initialize TLS cache for this thread
-        TLS_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            cache.limit = config.tls_cache_size;
-            // Pre-reserve capacity to avoid reallocations
-            cache.buffers.reserve(config.tls_cache_size);
+        // Initialize TLS limit for this thread
+        TLS_LIMIT.with(|limit| {
+            limit.set(config.tls_cache_size);
         });
 
         Self {
@@ -481,14 +502,26 @@ impl BufferPool {
         }
     }
 
-    /// Get the shard index for the current thread using round-robin
+    /// Get the shard index for the current thread using thread-local affinity
+    ///
+    /// Each thread gets a consistent shard assignment based on its thread ID hash.
+    /// This improves cache locality by having each thread reuse the same shard's
+    /// cached data structures.
     #[inline(always)]
     fn get_shard_index(&self) -> usize {
-        SHARD_COUNTER.with(|counter| {
-            let c = counter.get();
-            let idx = c & self.shard_mask; // Fast modulo using cached mask
-            counter.set(c.wrapping_add(1));
-            idx
+        SHARD_AFFINITY.with(|affinity| {
+            if let Some(idx) = affinity.get() {
+                // Fast path: affinity already computed
+                idx
+            } else {
+                // Cold path: compute affinity once per thread
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::thread::current().id().hash(&mut hasher);
+                let idx = (hasher.finish() as usize) & self.shard_mask;
+                affinity.set(Some(idx));
+                idx
+            }
         })
     }
 
@@ -507,18 +540,12 @@ impl BufferPool {
     ///
     /// This method may panic if internal invariants are violated (buffer found but cannot be removed).
     /// In practice, this should never occur under normal usage.
-    #[inline(always)]
+    #[inline]
     #[must_use]
     pub fn get(&self, size: usize) -> Vec<u8> {
         // Fastest path: thread-local cache (lock-free)
         let tls_hit = TLS_CACHE.with(|tls| {
             let mut cache = tls.borrow_mut();
-
-            // Initialize limit on first access (cold path)
-            if cache.limit == 0 {
-                cache.limit = self.config.tls_cache_size;
-                cache.buffers.reserve(self.config.tls_cache_size);
-            }
 
             // LIFO: Check most recently used buffer first (better cache locality)
             if let Some(buf) = cache.buffers.last()
@@ -529,6 +556,7 @@ impl BufferPool {
                 // a pooled buffer. The capacity check guarantees this is safe.
                 // Note: Buffer may contain uninitialized or previous data, but this
                 // doesn't cause UB - caller gets valid memory they can write to.
+                debug_assert!(buf.capacity() >= size, "Buffer capacity check failed");
                 unsafe { buf.set_len(size) };
                 return Some(buf);
             }
@@ -537,6 +565,10 @@ impl BufferPool {
             if let Some(idx) = cache.buffers.iter().position(|b| b.capacity() >= size) {
                 let mut buf = cache.buffers.swap_remove(idx);
                 // SAFETY: capacity >= size guaranteed by position() predicate
+                debug_assert!(
+                    buf.capacity() >= size,
+                    "Buffer capacity check failed in first-fit"
+                );
                 unsafe { buf.set_len(size) };
                 return Some(buf);
             }
@@ -551,6 +583,7 @@ impl BufferPool {
         let shard_idx = self.get_shard_index();
         // SAFETY: get_shard_index() uses bitmask (shard_mask = num_shards - 1) where
         // num_shards is power of 2, guaranteeing shard_idx < shards.len()
+        debug_assert!(shard_idx < self.shards.len(), "Shard index out of bounds");
         let mut shard = unsafe { self.shards.get_unchecked(shard_idx) }.lock();
 
         // LIFO: Try most recently returned buffer first (cache-hot)
@@ -560,21 +593,27 @@ impl BufferPool {
             let mut buffer = shard.pop().unwrap();
             self.total_buffers.fetch_sub(1, Ordering::Relaxed);
             // SAFETY: capacity >= size verified above
+            debug_assert!(
+                buffer.capacity() >= size,
+                "Buffer capacity check failed in shared pool LIFO"
+            );
             unsafe { buffer.set_len(size) };
             return buffer;
         }
 
         // First-fit fallback: scan for compatible buffer
-        let idx_opt = shard.iter().position(|b| b.capacity() >= size);
-
-        if let Some(idx) = idx_opt {
+        if let Some(idx) = shard.iter().position(|b| b.capacity() >= size) {
             let mut buffer = shard.swap_remove(idx);
             self.total_buffers.fetch_sub(1, Ordering::Relaxed);
             // SAFETY: capacity >= size guaranteed by position() predicate
+            debug_assert!(
+                buffer.capacity() >= size,
+                "Buffer capacity check failed in shared pool first-fit"
+            );
             unsafe { buffer.set_len(size) };
             buffer
         } else {
-            std::mem::drop(shard);
+            drop(shard);
             vec![0u8; size]
         }
     }
@@ -593,23 +632,28 @@ impl BufferPool {
     ///
     /// This method may panic if the TLS cache is in an invalid state.
     /// In practice, this should never occur under normal usage.
-    #[inline(always)]
+    #[inline]
     pub fn put(&self, mut buffer: Vec<u8>) {
         // Clear length but keep capacity
         buffer.clear();
+
+        // Initialize TLS limit on first use (cold path, happens once per thread)
+        let limit = TLS_LIMIT.with(|limit| {
+            let current = limit.get();
+            if current == 0 {
+                limit.set(self.config.tls_cache_size);
+                self.config.tls_cache_size
+            } else {
+                current
+            }
+        });
 
         // Fastest path: return to thread-local cache (lock-free)
         // Returns the buffer if not stored
         let buffer = TLS_CACHE.with(|tls| {
             let mut cache = tls.borrow_mut();
 
-            // Initialize limit if needed (cold path)
-            if cache.limit == 0 {
-                cache.limit = self.config.tls_cache_size;
-                cache.buffers.reserve(self.config.tls_cache_size);
-            }
-
-            if cache.buffers.len() < cache.limit {
+            if cache.buffers.len() < limit {
                 cache.buffers.push(buffer);
                 None // Successfully stored in TLS
             } else {
@@ -618,11 +662,9 @@ impl BufferPool {
         });
 
         // Fast path succeeded
-        if buffer.is_none() {
+        let Some(buffer) = buffer else {
             return;
-        }
-
-        let buffer = buffer.unwrap();
+        };
 
         // Fall back to shared pool (sharded to reduce contention)
         if buffer.capacity() < self.config.min_buffer_size {
@@ -636,6 +678,10 @@ impl BufferPool {
 
         let shard_idx = self.get_shard_index();
         // SAFETY: shard_idx guaranteed in bounds by bitmask operation in get_shard_index()
+        debug_assert!(
+            shard_idx < self.shards.len(),
+            "Shard index out of bounds in put"
+        );
         let mut shard = unsafe { self.shards.get_unchecked(shard_idx) }.lock();
 
         // Limit pool size per shard to prevent unbounded growth
@@ -674,6 +720,10 @@ impl BufferPool {
         // Distribute buffers across shards with single lock per shard
         for shard_idx in 0..self.config.num_shards {
             // SAFETY: shard_idx < num_shards by loop bounds
+            debug_assert!(
+                shard_idx < self.shards.len(),
+                "Shard index out of bounds in preallocate"
+            );
             let shard = unsafe { self.shards.get_unchecked(shard_idx) };
             let mut buffers = shard.lock();
             buffers.reserve(per_shard);
@@ -684,6 +734,10 @@ impl BufferPool {
             // Move buffers directly without cloning
             for i in start..end {
                 // SAFETY: i is in range [start, end) where end <= total_to_allocate
+                debug_assert!(
+                    i < all_buffers.len(),
+                    "Buffer index out of bounds in preallocate"
+                );
                 unsafe {
                     buffers.push(all_buffers.get_unchecked(i).clone());
                 }
@@ -1015,21 +1069,28 @@ mod tests {
             .tls_cache_size(2)
             .build();
 
-        // Put many buffers from separate thread to avoid TLS cache
-        let pool_clone = pool.clone();
-        thread::spawn(move || {
-            let mut buffers = vec![];
-            for _ in 0..20 {
-                buffers.push(pool_clone.get(1024));
-            }
-            for buf in buffers {
-                pool_clone.put(buf);
-            }
-        })
-        .join()
-        .unwrap();
+        // Spawn multiple threads to test distribution across shards
+        // Each thread has affinity to one shard, so multiple threads
+        // should distribute buffers across multiple shards
+        let mut handles = vec![];
+        for _ in 0..4 {
+            let pool_clone = pool.clone();
+            handles.push(thread::spawn(move || {
+                let mut buffers = vec![];
+                for _ in 0..5 {
+                    buffers.push(pool_clone.get(1024));
+                }
+                for buf in buffers {
+                    pool_clone.put(buf);
+                }
+            }));
+        }
 
-        // Buffers should be distributed across shards
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // With multiple threads, buffers should be distributed across shards
         let mut non_empty_shards = 0;
         for shard in pool.shards.iter() {
             if !shard.lock().is_empty() {
@@ -1037,7 +1098,7 @@ mod tests {
             }
         }
 
-        // Should have buffers in multiple shards (not all in one)
+        // Should have buffers in multiple shards due to thread affinity
         assert!(non_empty_shards >= 2);
     }
 
