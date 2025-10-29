@@ -20,5 +20,8 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Show HN draft post
-SHOW_HN.txt
+*.data
+
+# Profiling results (cargo-flamegraph)
+flamegraph.svg
+perf.data*

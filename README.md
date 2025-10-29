@@ -102,6 +102,26 @@ let pool = BufferPool::builder()
 
 Useful for high-performance computing, security-sensitive data, or real-time systems. May require elevated privileges on some systems. Falls back gracefully if pinning fails.
 
+### Eviction Policy
+
+Choose between simple LIFO or intelligent CLOCK-Pro buffer eviction:
+
+```rust
+use zeropool::{BufferPool, EvictionPolicy};
+
+let pool = BufferPool::builder()
+    .eviction_policy(EvictionPolicy::ClockPro)  // Better cache locality (default)
+    .build();
+
+let pool_lifo = BufferPool::builder()
+    .eviction_policy(EvictionPolicy::Lifo)     // Simple, lowest overhead
+    .build();
+```
+
+**CLOCK-Pro (default)**: Uses access counters to favor recently-used buffers, preventing cache thrashing in mixed-size workloads. ~8 bytes overhead per buffer.
+
+**LIFO**: Simple last-in-first-out eviction. Minimal memory overhead, best for uniform buffer sizes.
+
 ## Benchmarks
 
 ### Single-Threaded (allocation + deallocation)

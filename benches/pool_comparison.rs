@@ -235,91 +235,6 @@ fn benchmark_zeropool_multi_thread(c: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_allocation_patterns(c: &mut Criterion) {
-    let mut group = c.benchmark_group("allocation_patterns");
-    let size = 64 * 1024;
-
-    group.bench_function("zeropool_varied_sizes", |b| {
-        let pool = zeropool::BufferPool::new();
-        let sizes = [1024, 4096, 16384, 65536, 256 * 1024];
-        b.iter(|| {
-            for &size in &sizes {
-                let buf = pool.get(size);
-                black_box(&buf);
-                pool.put(buf);
-            }
-        });
-    });
-
-    group.bench_function("no_pool_varied_sizes", |b| {
-        let sizes = [1024, 4096, 16384, 65536, 256 * 1024];
-        b.iter(|| {
-            for &size in &sizes {
-                let buf = Vec::<u8>::with_capacity(size);
-                black_box(&buf);
-            }
-        });
-    });
-
-    group.bench_function("lifeguard_varied_sizes", |b| {
-        use lifeguard::Pool;
-        let pool: Pool<Vec<u8>> = Pool::with_size(10);
-        let sizes = [1024, 4096, 16384, 65536, 256 * 1024];
-        b.iter(|| {
-            for &size in &sizes {
-                let mut buf = pool.new();
-                buf.reserve(size);
-                black_box(&buf);
-            }
-        });
-    });
-
-    group.bench_function("zeropool_reuse", |b| {
-        let pool = zeropool::BufferPool::new();
-        pool.preallocate(10, size);
-        b.iter(|| {
-            let mut bufs = vec![];
-            for _ in 0..10 {
-                bufs.push(pool.get(size));
-            }
-            for buf in bufs {
-                black_box(&buf);
-                pool.put(buf);
-            }
-        });
-    });
-
-    group.bench_function("no_pool_reuse", |b| {
-        b.iter(|| {
-            let mut bufs = vec![];
-            for _ in 0..10 {
-                bufs.push(Vec::<u8>::with_capacity(size));
-            }
-            for buf in bufs {
-                black_box(&buf);
-            }
-        });
-    });
-
-    group.bench_function("lifeguard_reuse", |b| {
-        use lifeguard::Pool;
-        let pool: Pool<Vec<u8>> = Pool::with_size(10);
-        b.iter(|| {
-            let mut bufs = vec![];
-            for _ in 0..10 {
-                let mut buf = pool.new();
-                buf.reserve(size);
-                bufs.push(buf);
-            }
-            for buf in bufs {
-                black_box(&buf);
-            }
-        });
-    });
-
-    group.finish();
-}
-
 fn benchmark_bytes_pool(c: &mut Criterion) {
     let mut group = c.benchmark_group("bytes_comparison");
 
@@ -346,47 +261,10 @@ fn benchmark_bytes_pool(c: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_pinned_memory(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pinned_memory");
-    let size = 1024 * 1024; // 1MB buffers
-
-    group.bench_function("unpinned", |b| {
-        let pool = zeropool::BufferPool::builder().pinned_memory(false).build();
-        b.iter(|| {
-            let mut buf = pool.get(size);
-            black_box(&mut buf);
-            pool.put(buf);
-        });
-    });
-
-    group.bench_function("pinned", |b| {
-        let pool = zeropool::BufferPool::builder().pinned_memory(true).build();
-        b.iter(|| {
-            let mut buf = pool.get(size);
-            black_box(&mut buf);
-            pool.put(buf);
-        });
-    });
-
-    group.bench_function("pinned_preallocated", |b| {
-        let pool = zeropool::BufferPool::builder().pinned_memory(true).build();
-        pool.preallocate(10, size);
-        b.iter(|| {
-            let mut buf = pool.get(size);
-            black_box(&mut buf);
-            pool.put(buf);
-        });
-    });
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     benchmark_zeropool_single_thread,
     benchmark_zeropool_multi_thread,
-    benchmark_allocation_patterns,
-    benchmark_bytes_pool,
-    benchmark_pinned_memory
+    benchmark_bytes_pool
 );
 criterion_main!(benches);
