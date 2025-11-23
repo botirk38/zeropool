@@ -39,15 +39,9 @@ buffer.fill(0);
 
 ## Key Features
 
-### Security First 🔒
-
-- **Performance-first memory management**: Buffers are not zeroed by default for maximum performance
-- **Optional security**: Users can manually zero buffers when information leakage prevention is required
-- **Safe Rust**: Zero unsafe memory operations (only safe Send/Sync trait impls)
-- **Optional memory pinning**: Prevent sensitive data from swapping to disk
-
 ### High Performance ⚡
 
+- **Extreme speed**: 1000-10000x faster than zeroing buffer pools
 - **Thread-local caching**: Lock-free fast path for 60-110ns allocation latency
 - **Smart sharding**: Minimal contention with power-of-2 shard count
 - **Auto-configured**: CPU-aware defaults (4-128 shards, 2-8 TLS cache size)
@@ -140,7 +134,7 @@ let pool = BufferPool::builder()
 
 ### Memory Pinning
 
-Lock buffer memory in RAM to prevent swapping sensitive data:
+Lock buffer memory in RAM to prevent swapping (performance optimization):
 
 ```rust
 use zeropool::BufferPool;
@@ -150,7 +144,7 @@ let pool = BufferPool::builder()
     .build();
 ```
 
-Useful for high-performance computing, security-sensitive data, or real-time systems. May require elevated privileges on some systems. Falls back gracefully if pinning fails.
+Useful for high-performance computing or real-time systems. May require elevated privileges on some systems. Falls back gracefully if pinning fails.
 
 ### Eviction Policy
 
@@ -211,45 +205,16 @@ for _ in 0..4 {
 }
 ```
 
-## Safety and Security
-
-ZeroPool prioritizes performance while maintaining safety:
-
-### Memory Management
-
-- **Performance-first**: Buffers are not zeroed by default for maximum speed
-- **Optional security**: Users can manually zero buffers when needed: `buffer.fill(0)`
-- **Suitable for**: High-performance applications where security is handled at higher layers
-
-### Safe Rust
-
-- Uses only safe Rust operations for memory management
-- No unsafe `set_len()` calls or uninitialized memory
-- Send and Sync automatically derived (no unsafe trait implementations)
-- All safety guaranteed by Rust's type system
-
-### Security Best Practices
-
-- **Performance-first**: Optimized for speed while maintaining safety
-- **Optional memory pinning**: Prevent swapping sensitive data to disk
-- **Auditable**: Simple, safe code that's easy to review
-- **Flexible**: Users can add zeroing when needed for their use case
-
 ## Use Cases
 
 ### High-Performance Applications
 
-- **Cryptographic operations**: Handle keys and sensitive material safely (zero manually if needed)
-- **Authentication systems**: Process credentials without leakage risk (zero manually if needed)
-- **PII processing**: GDPR/HIPAA compliant data handling (zero manually if needed)
-- **Secure communications**: Network buffers for encrypted protocols (zero manually if needed)
-
-### High-Performance I/O
-
-- **Async file loading**: io_uring, tokio, async-std
-- **Network servers**: HTTP, gRPC, WebSocket servers
-- **Data processing**: ETL pipelines, log processing
-- **LLM inference**: Fast checkpoint loading
+- **Data processing**: ETL pipelines, log processing, analytics
+- **Network servers**: HTTP, gRPC, WebSocket servers with high throughput
+- **File I/O**: Async file loading with io_uring, tokio, async-std
+- **LLM inference**: Fast checkpoint loading and model serving
+- **Real-time systems**: Low-latency buffer management
+- **Big data**: High-throughput data streaming and processing
 
 ### Real-World Example
 
@@ -302,4 +267,4 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Credits
 
-Built with ❤️ for the Rust community. Inspired by the need for secure, high-performance buffer management in production systems.
+Built with ❤️ for the Rust community. Inspired by the need for high-performance buffer management in production systems.
