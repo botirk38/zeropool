@@ -1,6 +1,6 @@
 # ZeroPool
 
-> A high-performance, security-focused buffer pool for Rust
+> A high-performance buffer pool for Rust - Performance First
 
 [![Crates.io](https://img.shields.io/crates/v/zeropool.svg)](https://crates.io/crates/zeropool)
 [![Documentation](https://docs.rs/zeropool/badge.svg)](https://docs.rs/zeropool)
@@ -9,14 +9,14 @@
 
 ## Why ZeroPool?
 
-ZeroPool is a **high-performance buffer pool** that prioritizes speed while maintaining safety. Unlike traditional buffer pools that trade performance for security, ZeroPool provides both:
+ZeroPool is a **high-performance buffer pool** that prioritizes speed above all else. Unlike traditional buffer pools that trade performance for security features, ZeroPool delivers maximum performance:
 
-- **Performance-first**: No memory zeroing by default for maximum speed (1000-10000x faster)
+- **Performance-first**: No memory zeroing by default (1000-10000x faster than zeroing pools)
 - **Safe Rust**: No unsafe memory operations, only safe abstractions
 - **High performance**: Thread-local caching and smart allocation strategies minimize overhead
 - **Auto-configured**: Adapts to your CPU topology for optimal multi-threaded performance
 
-Perfect for high-throughput applications where performance is critical and security is handled at higher layers.
+Perfect for high-throughput applications where raw speed is the primary requirement.
 
 ## Quick Start
 
@@ -104,8 +104,8 @@ Thread 1     Thread 2     Thread N
 
 ### Performance Characteristics
 
+- **Extreme speed**: 1000-10000x faster than zeroing buffer pools
 - **Constant latency**: 60-110ns for TLS cache hits regardless of buffer size
-- **Performance-first**: 1000-10000x faster than zeroing implementations
 - **Lock-free fast path**: Thread-local cache eliminates contention
 - **Scales linearly**: Near-linear scaling up to 16+ threads
 
@@ -253,7 +253,7 @@ ZeroPool prioritizes performance while maintaining safety:
 
 ### Real-World Example
 
-Before ZeroPool, loading GPT-2 checkpoints took **200ms** with 70% spent on buffer allocation. With ZeroPool: **53ms** (3.8x faster) while maintaining security guarantees.
+Before ZeroPool, loading GPT-2 checkpoints took **200ms** with 70% spent on buffer allocation. With ZeroPool: **53ms** (3.8x faster) while delivering maximum performance without security overhead.
 
 ## System Scaling
 
@@ -279,7 +279,7 @@ ZeroPool automatically adapts to your system:
 | Auto-configured | ✅ CPU-aware | ❌ Manual | ❌ Manual | ❌ Manual |
 | Performance focus | ✅ Primary | ❌ No | ❌ No | ❌ No |
 
-ZeroPool is the only buffer pool designed for **performance-first** applications while maintaining competitive safety.
+ZeroPool is the fastest buffer pool available, designed purely for **maximum performance** while maintaining safety.
 
 ## License
 
