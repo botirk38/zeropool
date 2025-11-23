@@ -165,7 +165,7 @@ mod tests {
         thread::spawn(move || {
             // Create tls_cache_size + 1 buffers
             let mut buffers = Vec::new();
-            for _ in 0..(tls_cache_size + 1) {
+            for _ in 0..=tls_cache_size {
                 buffers.push(pool_clone.get(2 * 1024 * 1024));
             }
 

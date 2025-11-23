@@ -1,16 +1,16 @@
-/// File Processing Pipeline Profiling Program
-///
-/// Simulates a file processing pipeline with Read → Transform → Write stages.
-/// This workload demonstrates:
-/// - Sequential file processing with buffer reuse
-/// - Varied chunk sizes (4KB - 1MB) for different file types
-/// - Multi-stage pipeline showing buffer handoff patterns
-/// - Realistic I/O workload with data transformations
-///
-/// Usage: cargo flamegraph --profile profiling --bin file_pipeline
+//! File Processing Pipeline Profiling Program
+//!
+//! Simulates a file processing pipeline with Read → Transform → Write stages.
+//! This workload demonstrates:
+//! - Sequential file processing with buffer reuse
+//! - Varied chunk sizes (4KB - 1MB) for different file types
+//! - Multi-stage pipeline showing buffer handoff patterns
+//! - Realistic I/O workload with data transformations
+//!
+//! Usage: cargo flamegraph --profile profiling --bin file_pipeline
 use std::time::Instant;
 use zeropool::BufferPool;
-
+#[allow(missing_docs)]
 // Configuration - increased for better profiling visibility
 const NUM_FILES: usize = 500; // Increased from 100
 const CHUNKS_PER_FILE: usize = 50;
@@ -27,23 +27,13 @@ enum FileType {
 }
 
 impl FileType {
-    fn chunk_size(&self) -> usize {
+    fn chunk_size(self) -> usize {
         match self {
             FileType::SmallText => 4 * 1024,
             FileType::MediumJson => 16 * 1024,
             FileType::LargeImage => 64 * 1024,
             FileType::VideoChunk => 256 * 1024,
             FileType::Database => 1024 * 1024,
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        match self {
-            FileType::SmallText => "text",
-            FileType::MediumJson => "json",
-            FileType::LargeImage => "image",
-            FileType::VideoChunk => "video",
-            FileType::Database => "database",
         }
     }
 
@@ -58,11 +48,12 @@ impl FileType {
     }
 }
 
+/// Main function
 fn main() {
     eprintln!("=== File Processing Pipeline Profiling ===");
-    eprintln!("Files to process: {}", NUM_FILES);
-    eprintln!("Chunks per file: {}", CHUNKS_PER_FILE);
-    eprintln!("Simulation runs: {}", SIMULATION_RUNS);
+    eprintln!("Files to process: {NUM_FILES}");
+    eprintln!("Chunks per file: {CHUNKS_PER_FILE}");
+    eprintln!("Simulation runs: {SIMULATION_RUNS}");
     eprintln!();
 
     // Create pool optimized for file I/O
@@ -80,7 +71,7 @@ fn main() {
 
     for run in 1..=SIMULATION_RUNS {
         let run_start = Instant::now();
-        eprintln!("\n[Run {}/{}] Processing files...", run, SIMULATION_RUNS);
+        eprintln!("\n[Run {run}/{SIMULATION_RUNS}] Processing files...");
 
         let bytes_processed = process_all_files(&pool);
 
@@ -96,7 +87,7 @@ fn main() {
 
     let total_duration = total_start.elapsed();
     eprintln!("\n=== Profiling Complete ===");
-    eprintln!("Total time: {:.2?}", total_duration);
+    eprintln!("Total time: {total_duration:.2?}");
     eprintln!("Average run time: {:.2?}", total_duration / SIMULATION_RUNS as u32);
     eprintln!("Pool stats: {} buffers in pool", pool.len());
 }

@@ -1,18 +1,18 @@
-/// Stress Test Profiling Program
-///
-/// High-stress workload that combines multiple challenging patterns:
-/// - Burst allocations (sudden spikes in demand)
-/// - Cache thrashing (alternating sizes to stress eviction)
-/// - Multi-threaded contention under heavy load
-/// - Mixed allocation patterns testing edge cases
-/// - Eviction policy stress testing
-///
-/// Usage: cargo flamegraph --profile profiling --bin stress_test
+//! Stress Test Profiling Program
+//!
+//! High-stress workload that combines multiple challenging patterns:
+//! - Burst allocations (sudden spikes in demand)
+//! - Cache thrashing (alternating sizes to stress eviction)
+//! - Multi-threaded contention under heavy load
+//! - Mixed allocation patterns testing edge cases
+//! - Eviction policy stress testing
+//!
+//! Usage: cargo flamegraph --profile profiling --bin stress_test
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use zeropool::BufferPool;
-
+#[allow(missing_docs)]
 // Configuration - increased for better profiling visibility
 const NUM_STRESS_THREADS: usize = 12;
 const STRESS_DURATION_SECS: u64 = 30;
@@ -22,8 +22,8 @@ const THRASH_ITERATIONS: usize = 50000; // Increased from 5000
 // Size patterns for different stress scenarios
 const SMALL_SIZES: &[usize] = &[64, 128, 256, 512];
 const MEDIUM_SIZES: &[usize] = &[4096, 8192, 16384, 32768];
-const LARGE_SIZES: &[usize] = &[65536, 131072, 262144, 524288];
-const HUGE_SIZES: &[usize] = &[1048576, 2097152, 4194304];
+const LARGE_SIZES: &[usize] = &[65_536, 131_072, 262_144, 524_288];
+const HUGE_SIZES: &[usize] = &[1_048_576, 2_097_152, 4_194_304];
 
 #[derive(Clone, Copy)]
 enum StressPhase {
@@ -35,7 +35,7 @@ enum StressPhase {
 }
 
 impl StressPhase {
-    fn name(&self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             StressPhase::BurstAllocations => "Burst Allocations",
             StressPhase::CacheThrashing => "Cache Thrashing",
@@ -58,8 +58,8 @@ impl StressPhase {
 
 fn main() {
     eprintln!("=== Stress Test Profiling ===");
-    eprintln!("Stress threads: {}", NUM_STRESS_THREADS);
-    eprintln!("Duration: {}s", STRESS_DURATION_SECS);
+    eprintln!("Stress threads: {NUM_STRESS_THREADS}");
+    eprintln!("Duration: {STRESS_DURATION_SECS}s");
     eprintln!("Phases: {}", StressPhase::all().len());
     eprintln!();
 
@@ -89,7 +89,7 @@ fn main() {
 
     let total_duration = total_start.elapsed();
     eprintln!("\n=== Stress Test Complete ===");
-    eprintln!("Total time: {:.2?}", total_duration);
+    eprintln!("Total time: {total_duration:.2?}");
     eprintln!("Final pool size: {} buffers", pool.len());
 }
 
@@ -100,7 +100,7 @@ fn run_stress_phase(pool: &Arc<BufferPool>, phase: StressPhase) {
     // Spawn stress threads
     for thread_id in 0..NUM_STRESS_THREADS {
         let pool = Arc::clone(pool);
-        let handle = thread::spawn(move || stress_worker(thread_id, pool, phase));
+        let handle = thread::spawn(move || stress_worker(thread_id, &pool, phase));
         handles.push(handle);
     }
 
@@ -111,13 +111,13 @@ fn run_stress_phase(pool: &Arc<BufferPool>, phase: StressPhase) {
 }
 
 /// Worker thread running stress patterns
-fn stress_worker(thread_id: usize, pool: Arc<BufferPool>, phase: StressPhase) {
+fn stress_worker(thread_id: usize, pool: &Arc<BufferPool>, phase: StressPhase) {
     match phase {
-        StressPhase::BurstAllocations => burst_allocations(&pool, thread_id),
-        StressPhase::CacheThrashing => cache_thrashing(&pool, thread_id),
-        StressPhase::MixedSizes => mixed_sizes(&pool, thread_id),
-        StressPhase::EvictionPressure => eviction_pressure(&pool, thread_id),
-        StressPhase::RandomChaos => random_chaos(&pool, thread_id),
+        StressPhase::BurstAllocations => burst_allocations(pool, thread_id),
+        StressPhase::CacheThrashing => cache_thrashing(pool, thread_id),
+        StressPhase::MixedSizes => mixed_sizes(pool, thread_id),
+        StressPhase::EvictionPressure => eviction_pressure(pool, thread_id),
+        StressPhase::RandomChaos => random_chaos(pool, thread_id),
     }
 }
 
@@ -146,10 +146,10 @@ fn burst_allocations(pool: &BufferPool, _thread_id: usize) {
 
 /// Cache thrashing: Alternating sizes to stress TLS cache and eviction
 fn cache_thrashing(pool: &BufferPool, thread_id: usize) {
-    let pattern = if thread_id % 2 == 0 {
+    let pattern = if thread_id.is_multiple_of(2) {
         &[4096, 65536, 4096, 65536] // Small-large-small-large
     } else {
-        &[16384, 262144, 16384, 262144] // Medium-huge-medium-huge
+        &[16_384, 262_144, 16_384, 262_144] // Medium-huge-medium-huge
     };
 
     for _ in 0..THRASH_ITERATIONS {
@@ -214,25 +214,25 @@ fn eviction_pressure(pool: &BufferPool, _thread_id: usize) {
 
 /// Random chaos: Completely unpredictable access pattern
 fn random_chaos(pool: &BufferPool, thread_id: usize) {
-    let mut pseudo_random = thread_id.wrapping_mul(1103515245).wrapping_add(12345);
+    let mut pseudo_random = thread_id.wrapping_mul(1_103_515_245).wrapping_add(12345);
 
     for _ in 0..THRASH_ITERATIONS {
         // Generate pseudo-random size
-        pseudo_random = pseudo_random.wrapping_mul(1103515245).wrapping_add(12345);
+        pseudo_random = pseudo_random.wrapping_mul(1_103_515_245).wrapping_add(12345);
         let size_category = (pseudo_random >> 16) % 20;
 
         let size = match size_category {
-            0..=7 => SMALL_SIZES[(pseudo_random >> 8) as usize % SMALL_SIZES.len()],
-            8..=14 => MEDIUM_SIZES[(pseudo_random >> 8) as usize % MEDIUM_SIZES.len()],
-            15..=18 => LARGE_SIZES[(pseudo_random >> 8) as usize % LARGE_SIZES.len()],
-            _ => HUGE_SIZES[(pseudo_random >> 8) as usize % HUGE_SIZES.len()],
+            0..=7 => SMALL_SIZES[(pseudo_random >> 8) % SMALL_SIZES.len()],
+            8..=14 => MEDIUM_SIZES[(pseudo_random >> 8) % MEDIUM_SIZES.len()],
+            15..=18 => LARGE_SIZES[(pseudo_random >> 8) % LARGE_SIZES.len()],
+            _ => HUGE_SIZES[(pseudo_random >> 8) % HUGE_SIZES.len()],
         };
 
         let mut buffer = pool.get(size);
         process_buffer(&mut buffer);
 
         // Randomly hold onto some buffers
-        if pseudo_random % 10 == 0 {
+        if pseudo_random.is_multiple_of(10) {
             let mut held_buffers = Vec::new();
             for _ in 0..5 {
                 held_buffers.push(pool.get(size / 2));

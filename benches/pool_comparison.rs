@@ -1,3 +1,5 @@
+//! Pool comparison benchmarks
+#![allow(missing_docs)]
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -59,9 +61,9 @@ fn benchmark_zeropool_single_thread(c: &mut Criterion) {
 }
 
 fn benchmark_zeropool_multi_thread(c: &mut Criterion) {
+    const ITERATIONS_PER_THREAD: usize = 1000;
     let mut group = c.benchmark_group("multi_thread");
     let size = 64 * 1024;
-    const ITERATIONS_PER_THREAD: usize = 1000;
 
     for num_threads in [2, 4, 8] {
         group.throughput(Throughput::Bytes((size * num_threads * ITERATIONS_PER_THREAD) as u64));

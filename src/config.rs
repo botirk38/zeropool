@@ -1,16 +1,11 @@
 /// Buffer eviction policy
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EvictionPolicy {
     /// Simple LIFO (current behavior, lowest overhead)
     Lifo,
     /// CLOCK-Pro with access counter (better cache locality)
+    #[default]
     ClockPro,
-}
-
-impl Default for EvictionPolicy {
-    fn default() -> Self {
-        Self::ClockPro // New default for better performance
-    }
 }
 
 use std::thread;
@@ -212,15 +207,15 @@ impl Builder {
         assert!(max_buffers_per_shard > 0, "max_buffers_per_shard must be greater than 0");
 
         let config = PoolConfig {
-            num_shards: self
-                .num_shards
-                .map(|n| {
+            num_shards: self.num_shards.map_or_else(
+                || calculate_num_shards(num_cpus),
+                |n| {
                     let normalized = next_power_of_2(n).clamp(4, 128);
                     // Verify it's a power of 2 after clamping
                     debug_assert!(normalized.is_power_of_two(), "num_shards must be power of 2");
                     normalized
-                })
-                .unwrap_or_else(|| calculate_num_shards(num_cpus)),
+                },
+            ),
             tls_cache_size,
             max_buffers_per_shard,
             min_buffer_size: self.min_buffer_size.unwrap_or(DEFAULT_MIN_BUFFER_SIZE),

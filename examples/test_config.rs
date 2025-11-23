@@ -1,5 +1,7 @@
+//! Example demonstrating BufferPool configuration options
 use zeropool::BufferPool;
 
+/// Main function demonstrating pool configuration and usage
 fn main() {
     // Simple default pool
     let pool = BufferPool::new();

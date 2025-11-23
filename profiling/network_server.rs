@@ -1,19 +1,19 @@
-/// Network Server Profiling Program
-///
-/// Simulates a multi-threaded network server handling concurrent connections
-/// with realistic packet size distributions. This workload demonstrates:
-/// - Multi-threaded contention on the pool
-/// - Mixed small/large buffer allocations (64B - 64KB packets)
-/// - Request/response cycles with buffer reuse
-/// - TLS cache effectiveness under concurrent load
-/// - Realistic Zipf distribution for packet sizes
-///
-/// Usage: cargo flamegraph --profile profiling --bin network_server
+//! Network Server Profiling Program
+//!
+//! Simulates a multi-threaded network server handling concurrent connections
+//! with realistic packet size distributions. This workload demonstrates:
+//! - Multi-threaded contention on the pool
+//! - Mixed small/large buffer allocations (64B - 64KB packets)
+//! - Request/response cycles with buffer reuse
+//! - TLS cache effectiveness under concurrent load
+//! - Realistic Zipf distribution for packet sizes
+//!
+//! Usage: cargo flamegraph --profile profiling --bin network_server
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use zeropool::BufferPool;
-
+#[allow(missing_docs)]
 // Configuration - increased for better profiling visibility
 const NUM_WORKER_THREADS: usize = 8;
 const CONNECTIONS_PER_THREAD: usize = 5000; // Increased from 1000
@@ -36,12 +36,13 @@ const PACKET_SIZES: &[(usize, usize)] = &[
     (65536, 1), // 1% max size packets
 ];
 
+/// Main function
 fn main() {
     eprintln!("=== Network Server Profiling ===");
-    eprintln!("Worker threads: {}", NUM_WORKER_THREADS);
-    eprintln!("Connections per thread: {}", CONNECTIONS_PER_THREAD);
-    eprintln!("Requests per connection: {}", REQUESTS_PER_CONNECTION);
-    eprintln!("Target duration: {}s", SIMULATION_DURATION_SECS);
+    eprintln!("Worker threads: {NUM_WORKER_THREADS}");
+    eprintln!("Connections per thread: {CONNECTIONS_PER_THREAD}");
+    eprintln!("Requests per connection: {REQUESTS_PER_CONNECTION}");
+    eprintln!("Target duration: {SIMULATION_DURATION_SECS}s");
     eprintln!();
 
     // Create pool optimized for high concurrency
@@ -60,12 +61,12 @@ fn main() {
     let start = Instant::now();
     let mut handles = Vec::new();
 
-    eprintln!("\nStarting {} worker threads...", NUM_WORKER_THREADS);
+    eprintln!("\nStarting {NUM_WORKER_THREADS} worker threads...");
 
     // Spawn worker threads
     for worker_id in 0..NUM_WORKER_THREADS {
         let pool = Arc::clone(&pool);
-        let handle = thread::spawn(move || worker_thread(worker_id, pool));
+        let handle = thread::spawn(move || worker_thread(worker_id, &pool));
         handles.push(handle);
     }
 
@@ -82,8 +83,8 @@ fn main() {
     let duration = start.elapsed();
 
     eprintln!("\n=== Profiling Complete ===");
-    eprintln!("Duration: {:.2?}", duration);
-    eprintln!("Total requests: {}", total_requests);
+    eprintln!("Duration: {duration:.2?}");
+    eprintln!("Total requests: {total_requests}");
     eprintln!("Total data processed: {:.2} GB", total_bytes as f64 / 1e9);
     eprintln!("Throughput: {:.0} req/s", total_requests as f64 / duration.as_secs_f64());
     eprintln!("Bandwidth: {:.2} GB/s", total_bytes as f64 / duration.as_secs_f64() / 1e9);
@@ -100,17 +101,17 @@ fn preallocate_common_sizes(pool: &BufferPool) {
 }
 
 /// Worker thread handling connections
-fn worker_thread(worker_id: usize, pool: Arc<BufferPool>) -> (usize, usize) {
+fn worker_thread(worker_id: usize, pool: &Arc<BufferPool>) -> (usize, usize) {
     let mut requests_processed = 0;
     let mut bytes_processed = 0;
 
     if worker_id == 0 {
-        eprintln!("  Worker {} started", worker_id);
+        eprintln!("  Worker {worker_id} started");
     }
 
     // Handle multiple connections
-    for conn_id in 0..CONNECTIONS_PER_THREAD {
-        let (reqs, bytes) = handle_connection(&pool);
+    for _conn_id in 0..CONNECTIONS_PER_THREAD {
+        let (reqs, bytes) = handle_connection(pool);
         requests_processed += reqs;
         bytes_processed += bytes;
     }

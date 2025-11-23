@@ -1,13 +1,16 @@
+//! Cache behavior benchmarks
+#![allow(missing_docs)]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use zeropool::{BufferPool, EvictionPolicy};
 
+/// Benchmark ping pong pattern
 fn benchmark_ping_pong_pattern(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_behavior/ping_pong");
 
     for policy in [EvictionPolicy::Lifo, EvictionPolicy::ClockPro] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}", policy)),
+            BenchmarkId::from_parameter(format!("{policy:?}")),
             &policy,
             |b, &policy| {
                 let pool = BufferPool::builder().eviction_policy(policy).tls_cache_size(10).build();
@@ -33,12 +36,13 @@ fn benchmark_ping_pong_pattern(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark hot cold buffers
 fn benchmark_hot_cold_buffers(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_behavior/hot_cold");
 
     for policy in [EvictionPolicy::Lifo, EvictionPolicy::ClockPro] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}", policy)),
+            BenchmarkId::from_parameter(format!("{policy:?}")),
             &policy,
             |b, &policy| {
                 let pool = BufferPool::builder().eviction_policy(policy).tls_cache_size(10).build();
@@ -70,12 +74,13 @@ fn benchmark_hot_cold_buffers(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark multi size workload
 fn benchmark_multi_size_workload(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_behavior/multi_size");
 
     for policy in [EvictionPolicy::Lifo, EvictionPolicy::ClockPro] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}", policy)),
+            BenchmarkId::from_parameter(format!("{policy:?}")),
             &policy,
             |b, &policy| {
                 let pool = BufferPool::builder().eviction_policy(policy).tls_cache_size(15).build();
@@ -98,6 +103,7 @@ fn benchmark_multi_size_workload(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark TLS cache effectiveness
 fn benchmark_tls_cache_effectiveness(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_behavior/tls_cache");
 
@@ -142,6 +148,7 @@ fn benchmark_tls_cache_effectiveness(c: &mut Criterion) {
 // causes buffer corruption when TLS cache is shared between instances.
 // TODO: Add pool instance ID tracking to safely support this pattern
 
+/// Benchmark eviction pressure
 fn benchmark_eviction_pressure(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_behavior/eviction_pressure");
 
@@ -150,7 +157,7 @@ fn benchmark_eviction_pressure(c: &mut Criterion) {
 
     for policy in [EvictionPolicy::Lifo, EvictionPolicy::ClockPro] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}", policy)),
+            BenchmarkId::from_parameter(format!("{policy:?}")),
             &policy,
             |b, &policy| {
                 let pool = BufferPool::builder()
@@ -179,6 +186,7 @@ fn benchmark_eviction_pressure(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark atomic counter contention
 fn benchmark_atomic_counter_contention(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_behavior/atomic_contention");
 

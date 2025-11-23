@@ -105,7 +105,7 @@ impl Shard {
 ///         │    ...         │  clamped to [4, 128]
 ///         └────────────────┘
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BufferPool {
     pub(crate) shards: Arc<Vec<Shard>>, // Changed to use Shard struct
     pub(crate) config: PoolConfig,
@@ -364,7 +364,7 @@ impl BufferPool {
         } else {
             // NEW: Eviction when shard full
             if self.config.eviction_policy == EvictionPolicy::ClockPro {
-                self.evict_and_insert(&mut buffers, buffer);
+                Self::evict_and_insert(&mut buffers, buffer);
             }
             // Otherwise drop buffer (current behavior)
         }
@@ -372,7 +372,7 @@ impl BufferPool {
     }
 
     /// Evict cold buffer and insert new one using CLOCK-Pro algorithm
-    fn evict_and_insert(&self, shard: &mut [BufferEntry], new_buffer: Vec<u8>) {
+    fn evict_and_insert(shard: &mut [BufferEntry], new_buffer: Vec<u8>) {
         // Safety check: shard must not be empty
         if shard.is_empty() {
             return;

@@ -71,6 +71,14 @@ literal-representation-threshold = 16
 large-error-threshold = 128
 
 # =============================================================================
+# Dependencies
+# =============================================================================
+# Allow multiple versions of certain crates due to transitive dependencies
+# bitflags: Used by both parking_lot (1.x) and newer dependencies (2.x)
+# This will resolve itself when dependencies converge
+allowed-duplicate-crates = ["bitflags"]
+
+# =============================================================================
 # ALLOWED LINTS (Pragmatic Exceptions)
 # =============================================================================
 # These lints are explicitly allowed for valid reasons in performance code

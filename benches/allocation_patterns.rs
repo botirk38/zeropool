@@ -1,6 +1,9 @@
+//! Allocation patterns benchmarks
+#![allow(missing_docs)]
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
+/// Benchmark allocation patterns
 fn benchmark_allocation_patterns(c: &mut Criterion) {
     let mut group = c.benchmark_group("allocation_patterns");
     let size = 64 * 1024;
@@ -86,6 +89,7 @@ fn benchmark_allocation_patterns(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark burst allocations
 fn benchmark_burst_allocations(c: &mut Criterion) {
     let mut group = c.benchmark_group("burst_allocations");
     let size = 64 * 1024;
@@ -134,15 +138,16 @@ fn benchmark_burst_allocations(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark zipf distribution
 fn benchmark_zipf_distribution(c: &mut Criterion) {
     let mut group = c.benchmark_group("zipf_distribution");
     // Simulate realistic workload: small buffers are much more common
     let sizes = [
-        (1024, 50),  // 50% of requests
-        (4096, 25),  // 25% of requests
-        (16384, 15), // 15% of requests
-        (65536, 7),  // 7% of requests
-        (262144, 3), // 3% of requests
+        (1024, 50),   // 50% of requests
+        (4096, 25),   // 25% of requests
+        (16384, 15),  // 15% of requests
+        (65536, 7),   // 7% of requests
+        (262_144, 3), // 3% of requests
     ];
 
     group.bench_function("zeropool_zipf", |b| {

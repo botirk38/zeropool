@@ -143,8 +143,8 @@ mod tests {
         let pool = BufferPool::new();
 
         let cap = {
-            let _buffer = pool.get(1024);
-            _buffer.capacity()
+            let buffer = pool.get(1024);
+            buffer.capacity()
             // Buffer should auto-return on drop
         };
 
@@ -194,7 +194,7 @@ mod tests {
         let pool = BufferPool::new();
         let buffer = pool.get(1024);
 
-        let debug_str = format!("{:?}", buffer);
+        let debug_str = format!("{buffer:?}");
         assert!(debug_str.contains("PooledBuffer"));
         assert!(debug_str.contains("len"));
         assert!(debug_str.contains("capacity"));

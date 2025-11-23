@@ -1,6 +1,9 @@
+//! Memory features benchmarks
+#![allow(missing_docs)]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
+/// Benchmark pinned memory
 fn benchmark_pinned_memory(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_features/pinned");
     let size = 1024 * 1024; // 1MB buffers
@@ -36,6 +39,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark preallocation effectiveness
 fn benchmark_preallocation_effectiveness(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_features/preallocation");
 
@@ -66,6 +70,7 @@ fn benchmark_preallocation_effectiveness(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark memory pressure
 fn benchmark_memory_pressure(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_features/pressure");
 
@@ -98,6 +103,7 @@ fn benchmark_memory_pressure(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark shard scaling
 fn benchmark_shard_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_features/shard_scaling");
 
@@ -126,6 +132,7 @@ fn benchmark_shard_scaling(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark min buffer size filtering
 fn benchmark_min_buffer_size_filtering(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_features/min_size");
 

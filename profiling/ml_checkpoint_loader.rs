@@ -1,16 +1,16 @@
-/// ML Checkpoint Loader Profiling Program
-///
-/// Simulates loading large machine learning model checkpoints with realistic
-/// buffer allocation patterns. This workload demonstrates:
-/// - Large sequential allocations (tensor weights)
-/// - Mixed small/large buffer sizes (metadata + tensors)
-/// - Buffer reuse across multiple epochs
-/// - Realistic ML workload from the README use case
-///
-/// Usage: cargo flamegraph --profile profiling --bin ml_checkpoint_loader
+//! ML Checkpoint Loader Profiling Program
+//!
+//! Simulates loading large machine learning model checkpoints with realistic
+//! buffer allocation patterns. This workload demonstrates:
+//! - Large sequential allocations (tensor weights)
+//! - Mixed small/large buffer sizes (metadata + tensors)
+//! - Buffer reuse across multiple epochs
+//! - Realistic ML workload from the README use case
+//!
+//! Usage: cargo flamegraph --profile profiling --bin ml_checkpoint_loader
 use std::time::Instant;
 use zeropool::BufferPool;
-
+#[allow(missing_docs)]
 // Configuration - massively increased for perf profiling
 const TOTAL_MODEL_SIZE_GB: usize = 2;
 const NUM_EPOCHS: usize = 1000; // Increased to 1000 for perf profiling
@@ -24,11 +24,12 @@ const ATTENTION_WEIGHT_SIZE: usize = 64 * 1024 * 1024; // 64MB
 const FFN_WEIGHT_SIZE: usize = 256 * 1024 * 1024; // 256MB
 const LAYER_NORM_SIZE: usize = 1024 * 1024; // 1MB
 
+/// Main function
 fn main() {
     eprintln!("=== ML Checkpoint Loader Profiling ===");
-    eprintln!("Model size: {} GB", TOTAL_MODEL_SIZE_GB);
-    eprintln!("Epochs: {}", NUM_EPOCHS);
-    eprintln!("Layers: {}", NUM_LAYERS);
+    eprintln!("Model size: {TOTAL_MODEL_SIZE_GB} GB");
+    eprintln!("Epochs: {NUM_EPOCHS}");
+    eprintln!("Layers: {NUM_LAYERS}");
     eprintln!();
 
     // Create pool with configuration optimized for large buffers
@@ -47,7 +48,7 @@ fn main() {
     for epoch in 1..=NUM_EPOCHS {
         // Only print progress every 10 epochs to reduce I/O overhead
         if epoch % 10 == 1 || epoch == NUM_EPOCHS {
-            eprintln!("Processing epoch {}/{}...", epoch, NUM_EPOCHS);
+            eprintln!("Processing epoch {epoch}/{NUM_EPOCHS}...");
         }
 
         load_checkpoint(&pool);
@@ -55,7 +56,7 @@ fn main() {
 
     let total_duration = total_start.elapsed();
     eprintln!("\n=== Profiling Complete ===");
-    eprintln!("Total time: {:.2?}", total_duration);
+    eprintln!("Total time: {total_duration:.2?}");
     eprintln!("Average epoch time: {:.2?}", total_duration / NUM_EPOCHS as u32);
     eprintln!("Pool stats: {} buffers in pool", pool.len());
 }
