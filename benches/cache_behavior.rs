@@ -25,8 +25,8 @@ fn benchmark_ping_pong_pattern(c: &mut Criterion) {
                         let buf2 = pool.get(1024 * 1024);
                         black_box(&buf1);
                         black_box(&buf2);
-                        pool.put(buf1);
-                        pool.put(buf2);
+                        drop(buf1);
+                        drop(buf2);
                     }
                 });
             },
@@ -66,7 +66,7 @@ fn benchmark_hot_cold_buffers(c: &mut Criterion) {
                     }
 
                     for buf in bufs {
-                        pool.put(buf);
+                        drop(buf);
                     }
                 });
             },
@@ -96,7 +96,7 @@ fn benchmark_multi_size_workload(c: &mut Criterion) {
                         for &size in &sizes {
                             let buf = pool.get(size);
                             black_box(&buf);
-                            pool.put(buf);
+                            drop(buf);
                         }
                     }
                 });
@@ -136,7 +136,7 @@ fn benchmark_tls_cache_effectiveness(c: &mut Criterion) {
 
                     // Return to TLS cache
                     for buf in bufs {
-                        pool.put(buf);
+                        drop(buf);
                     }
                 });
             },
@@ -178,7 +178,7 @@ fn benchmark_eviction_pressure(c: &mut Criterion) {
                     }
 
                     for buf in bufs {
-                        pool.put(buf);
+                        drop(buf);
                     }
                 });
             },
@@ -212,7 +212,7 @@ fn benchmark_atomic_counter_contention(c: &mut Criterion) {
                                 for _ in 0..1000 {
                                     let buf = pool.get(1024);
                                     black_box(&buf);
-                                    pool.put(buf);
+                                    drop(buf);
                                 }
                             }));
                         }

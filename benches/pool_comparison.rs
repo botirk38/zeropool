@@ -14,7 +14,7 @@ fn benchmark_zeropool_single_thread(c: &mut Criterion) {
             b.iter(|| {
                 let mut buf = pool.get(size);
                 black_box(&mut buf);
-                pool.put(buf);
+                drop(buf);
             });
         });
 
@@ -92,7 +92,7 @@ fn benchmark_zeropool_multi_thread(c: &mut Criterion) {
                                 for _ in 0..ITERATIONS_PER_THREAD {
                                     let mut buf = pool.get(size);
                                     black_box(&mut buf);
-                                    pool.put(buf);
+                                    drop(buf);
                                 }
 
                                 barrier_end.wait();
@@ -246,7 +246,7 @@ fn benchmark_bytes_pool(c: &mut Criterion) {
             b.iter(|| {
                 let mut buf = pool.get(size);
                 black_box(&mut buf);
-                pool.put(buf);
+                drop(buf);
             });
         });
 

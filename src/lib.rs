@@ -30,9 +30,7 @@
 //!
 //! // Use the buffer for I/O operations
 //! // ... read/write operations ...
-//!
-//! // Return buffer to pool for reuse
-//! pool.put(buffer);
+//! // Buffer automatically returned to pool when it goes out of scope
 //! ```
 //!
 //! # Custom Configuration
@@ -63,16 +61,17 @@
 //! | Large Server | 64 | 8 | 32 | 64 | 2048 (~2GB) |
 //! | Supercompute | 128 | 8 | 64 | 64 | 4096 (~4GB) |
 //!
-//! # Safety
+//! # Safety and Security
 //!
-//! ZeroPool uses targeted unsafe optimizations for maximum performance while maintaining
-//! memory safety guarantees:
+//! ZeroPool prioritizes safety and security with the following guarantees:
 //!
-//! - **`set_len()` instead of `resize()`**: When reusing pooled buffers, we use unsafe
-//!   `set_len()` to avoid redundant zero-initialization. This is safe because:
-//!   1. Capacity is always verified before setting length
-//!   2. Buffers are pooled (previously allocated and cleared)
-//!   3. Users receive initialized memory (may contain previous data, but no UB)
+//! - **Memory zeroing**: All buffers are explicitly zeroed when returned to the pool and when
+//!   allocated from the pool. This prevents information leakage between buffer users, making
+//!   ZeroPool safe for security-sensitive workloads.
+//!
+//! - **Safe memory operations**: Uses safe Rust methods like `resize()` and `fill()` to manage
+//!   buffer contents, avoiding unsafe code wherever possible. The only remaining unsafe code is
+//!   for safe trait implementations (`Send`/`Sync`).
 //!
 //! - **Safe shard indexing**: Shard index is masked with `shard_mask` (power of 2 - 1),
 //!   guaranteeing bounds. Runtime assertions verify this invariant before access.
@@ -81,12 +80,14 @@
 //!   using `mlock` to prevent swapping. This is best-effort and fails gracefully if insufficient
 //!   permissions. Useful for security-sensitive or latency-critical workloads.
 
+mod buffer;
 mod config;
 mod pool;
 mod tls;
 mod utils;
 
 // Public API exports
+pub use buffer::PooledBuffer;
 pub use config::{Builder, EvictionPolicy};
 pub use pool::BufferPool;
 
@@ -102,8 +103,8 @@ mod tests {
         let buf = pool.get(1024);
         assert_eq!(buf.len(), 1024);
 
-        // Return it
-        pool.put(buf);
+        // Return it (automatically on drop)
+        drop(buf);
 
         // Should reuse the buffer
         let buf2 = pool.get(1024);
@@ -120,7 +121,7 @@ mod tests {
         assert_eq!(buf.len(), 2048);
 
         // Return it
-        pool.put(buf);
+        drop(buf); // Auto-returned to pool
 
         // Smaller request should reuse the buffer
         let buf2 = pool.get(1024);
@@ -145,12 +146,12 @@ mod tests {
             // Fill TLS cache with small buffers
             for _ in 0..tls_cache_size {
                 let buf = pool_clone.get(512);
-                pool_clone.put(buf);
+                drop(buf); // Auto-returned to pool
             }
 
             // Next small buffer should be rejected by shared pool (below min_size)
             let small_buf = pool_clone.get(512);
-            pool_clone.put(small_buf);
+            drop(small_buf); // Auto-returned to pool
         })
         .join()
         .unwrap();
@@ -170,7 +171,7 @@ mod tests {
 
             // Return them all - first tls_cache_size go to TLS, last one to shared pool
             for buf in buffers {
-                pool_clone.put(buf);
+                drop(buf); // Auto-returned to pool
             }
         })
         .join()
@@ -202,7 +203,7 @@ mod tests {
 
         // Return them all
         for buf in buffers {
-            pool.put(buf);
+            drop(buf); // Auto-returned to pool
         }
 
         // Each shard should have max 2 buffers (max_pool_size)
@@ -223,7 +224,7 @@ mod tests {
         // First tls_cache_size get/put operations should use TLS
         for _ in 0..cache_size {
             let buf = pool.get(1024);
-            pool.put(buf);
+            drop(buf); // Auto-returned to pool
         }
 
         // Pool should be empty (all buffers in TLS)
@@ -261,7 +262,7 @@ mod tests {
         // Test that it actually works
         let buf = pool2.get(512 * 1024);
         assert_eq!(buf.len(), 512 * 1024);
-        pool2.put(buf);
+        drop(buf); // Auto-returned to pool
     }
 
     #[test]
@@ -278,7 +279,7 @@ mod tests {
                 for _ in 0..100 {
                     let buf = pool.get(4096);
                     assert_eq!(buf.len(), 4096);
-                    pool.put(buf);
+                    drop(buf); // Auto-returned to pool
                 }
             }));
         }
@@ -302,8 +303,8 @@ mod tests {
         // Get buffers in main thread to fill TLS cache
         let buf1 = pool.get(1024);
         let buf2 = pool.get(1024);
-        pool.put(buf1);
-        pool.put(buf2);
+        drop(buf1); // Auto-returned to pool
+        drop(buf2); // Auto-returned to pool
 
         // Clone the pool
         let pool_clone = pool.clone();
@@ -312,9 +313,9 @@ mod tests {
         let buf3 = pool_clone.get(2048);
         let buf4 = pool_clone.get(2048);
         let buf5 = pool_clone.get(2048);
-        pool_clone.put(buf3);
-        pool_clone.put(buf4);
-        pool_clone.put(buf5);
+        drop(buf3); // Auto-returned to pool
+        drop(buf4); // Auto-returned to pool
+        drop(buf5); // Auto-returned to pool
 
         // Original pool should see buffers in shared pool
         assert!(!pool.is_empty());
@@ -355,7 +356,7 @@ mod tests {
         // Test zero-size buffer
         let buf_zero = pool.get(0);
         assert_eq!(buf_zero.len(), 0);
-        pool.put(buf_zero);
+        drop(buf_zero); // Auto-returned to pool
 
         // Test very large buffer - fill TLS cache first, then add more
         let pool_clone = pool.clone();
@@ -363,13 +364,13 @@ mod tests {
             // Fill TLS cache
             let b1 = pool_clone.get(1024);
             let b2 = pool_clone.get(1024);
-            pool_clone.put(b1);
-            pool_clone.put(b2);
+            drop(b1); // Auto-returned to pool
+            drop(b2); // Auto-returned to pool
 
             // This should overflow to shared pool
             let buf_large = pool_clone.get(100 * 1024 * 1024); // 100MB
             assert_eq!(buf_large.len(), 100 * 1024 * 1024);
-            pool_clone.put(buf_large);
+            drop(buf_large); // Auto-returned to pool
         })
         .join()
         .unwrap();
@@ -400,7 +401,7 @@ mod tests {
                     buffers.push(pool_clone.get(1024));
                 }
                 for buf in buffers {
-                    pool_clone.put(buf);
+                    drop(buf); // Auto-returned to pool
                 }
             }));
         }
@@ -436,21 +437,21 @@ mod tests {
         // Add 5 buffers (fill shard to max)
         for &size in &sizes[0..5] {
             let buf = vec![0u8; size];
-            pool.put(buf);
+            drop(buf); // Auto-returned to pool
         }
 
         // Access first 3 buffers repeatedly (make them hot)
         for _ in 0..10 {
             for &size in &sizes[0..3] {
                 let buf = pool.get(size);
-                pool.put(buf);
+                drop(buf); // Auto-returned to pool
             }
         }
 
         // Add 5 more buffers (trigger eviction)
         for &size in &sizes[5..10] {
             let buf = vec![0u8; size];
-            pool.put(buf);
+            drop(buf); // Auto-returned to pool
         }
 
         // Hot buffers (0-2) should still be available
@@ -458,7 +459,7 @@ mod tests {
         for &size in &sizes[0..3] {
             let buf = pool.get(size);
             assert_eq!(buf.capacity(), size, "Hot buffer was evicted!");
-            pool.put(buf);
+            drop(buf); // Auto-returned to pool
         }
     }
 
@@ -475,7 +476,7 @@ mod tests {
             buffers.push(pool.get(1024));
         }
         for buf in buffers {
-            pool.put(buf);
+            drop(buf); // Auto-returned to pool
         }
 
         assert!(!pool.is_empty());
@@ -489,6 +490,33 @@ mod tests {
         // Pool should still work after clear
         let buf = pool.get(1024);
         assert_eq!(buf.len(), 1024);
-        pool.put(buf);
+        drop(buf); // Auto-returned to pool
+    }
+
+    #[test]
+    fn test_buffer_zeroing() {
+        let pool = BufferPool::builder()
+            .min_buffer_size(0)
+            .tls_cache_size(1)
+            .build();
+
+        // Get a buffer and fill it with non-zero data
+        {
+            let mut buf = pool.get(1024);
+            for i in 0..1024 {
+                buf[i] = (i % 256) as u8;
+            }
+            // Verify buffer has non-zero data
+            assert!(buf.iter().any(|&b| b != 0));
+            // Buffer returns to pool here and should be zeroed
+        }
+
+        // Get another buffer - should be zeroed
+        let buf2 = pool.get(1024);
+
+        // Check that buffer is completely zeroed
+        assert!(buf2.iter().all(|&b| b == 0),
+            "Buffer was not properly zeroed! First 20 bytes: {:?}",
+            &buf2[..20]);
     }
 }

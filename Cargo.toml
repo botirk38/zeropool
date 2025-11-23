@@ -1,6 +1,6 @@
 [package]
 name = "zeropool"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Botir Khaltaev"]
 description = "High-performance buffer pool with constant-time allocation, thread-safe operations, and 5x speedup over bytes crate"
@@ -9,6 +9,76 @@ license = "MIT OR Apache-2.0"
 keywords = ["buffer", "pool", "io", "performance", "zero-copy"]
 categories = ["memory-management", "data-structures"]
 readme = "README.md"
+
+# =============================================================================
+# Lint Configuration
+# =============================================================================
+# Main Clippy configuration is in clippy.toml
+# Formatting configuration is in rustfmt.toml
+#
+# This section defines lint levels for the crate.
+# Strategy: Deny critical issues, warn on quality/style issues
+
+[lints.rust]
+# Warn on unsafe code usage (we allow it but want visibility)
+unsafe_code = "warn"
+# Enforce documentation for public API
+missing_docs = "warn"
+# Warn on missing debug implementations
+missing_debug_implementations = "warn"
+# Catch unused items
+unused = "warn"
+
+[lints.clippy]
+# =============================================================================
+# DENY: Critical correctness, safety, and performance issues
+# =============================================================================
+# These will fail compilation - must be fixed immediately
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = { level = "deny", priority = -1 }
+
+# =============================================================================
+# WARN: Code quality, style, and best practices
+# =============================================================================
+# These will show warnings - should be addressed before release
+# Use lower priority (-2) so specific lint settings can override these groups
+all = { level = "warn", priority = -2 }
+pedantic = { level = "warn", priority = -2 }
+complexity = { level = "warn", priority = -2 }
+style = { level = "warn", priority = -2 }
+cargo = { level = "warn", priority = -2 }
+
+# =============================================================================
+# ALLOW: Pragmatic exceptions for performance-critical code
+# =============================================================================
+# These are intentionally allowed for valid reasons in this codebase
+
+# Performance optimizations
+inline_always = "allow"            # Used deliberately for hot paths
+cast_possible_truncation = "allow" # Intentional in shard indexing
+cast_precision_loss = "allow"      # Acceptable for metrics/stats
+cast_sign_loss = "allow"           # Safe in context
+
+# Code organization
+module_name_repetitions = "allow" # pool::Pool is idiomatic
+similar_names = "allow"           # shard/shard_idx clear in context
+too_many_lines = "allow"          # Some init functions are long but linear
+struct_excessive_bools = "allow"  # Config structs need many options
+
+# API design
+must_use_candidate = "allow"       # Prefer explicit #[must_use]
+return_self_not_must_use = "allow" # Builder pattern returns Self
+missing_errors_doc = "allow"       # Panic-based error handling
+missing_panics_doc = "allow"       # Panics are for invariant violations
+
+# Unsafe code (already have SAFETY comments)
+multiple_unsafe_ops_per_block = "allow" # Sometimes needed for atomicity
+
+# Pedantic style preferences
+doc_markdown = "allow"       # Allow flexibility in doc formatting
+option_if_let_else = "allow" # Sometimes more readable
 
 [dependencies]
 parking_lot = "0.12.5"
@@ -26,6 +96,10 @@ object-pool = "0.6"
 [profile.bench]
 debug = true
 
+[profile.profiling]
+inherits = "release"
+debug = true
+
 [[bench]]
 name = "pool_comparison"
 harness = false
@@ -41,3 +115,19 @@ harness = false
 [[bench]]
 name = "memory_features"
 harness = false
+
+[[bin]]
+name = "ml_checkpoint_loader"
+path = "profiling/ml_checkpoint_loader.rs"
+
+[[bin]]
+name = "network_server"
+path = "profiling/network_server.rs"
+
+[[bin]]
+name = "file_pipeline"
+path = "profiling/file_pipeline.rs"
+
+[[bin]]
+name = "stress_test"
+path = "profiling/stress_test.rs"

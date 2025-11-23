@@ -1,0 +1,210 @@
+# Rustfmt Configuration for ZeroPool
+# High-performance, thread-safe buffer pool library
+# Edition: 2024 | Style: Modern Rust with performance focus
+
+# =============================================================================
+# Edition & Language Features
+# =============================================================================
+edition = "2024"
+# Use the latest stable rustfmt features
+unstable_features = false
+
+# =============================================================================
+# Import Organization
+# =============================================================================
+# Group and sort imports for clarity
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+# Reorder imports alphabetically within groups
+reorder_imports = true
+# Reorder modules declarations
+reorder_modules = true
+
+# =============================================================================
+# Line Width & Wrapping
+# =============================================================================
+# Standard Rust community default
+max_width = 100
+# Be slightly more permissive with comments for readability
+comment_width = 100
+# Hard limit - never exceed this
+use_small_heuristics = "Default"
+
+# =============================================================================
+# Function & Argument Formatting
+# =============================================================================
+# Function definitions and calls
+fn_args_layout = "Tall"
+fn_call_width = 80
+# Put function parameters on separate lines if too long
+fn_params_layout = "Tall"
+# Single expression functions can be compressed
+fn_single_line = false
+
+# =============================================================================
+# Control Flow Formatting
+# =============================================================================
+# Always use braces for control flow (safety)
+control_brace_style = "AlwaysSameLine"
+# Format match arms consistently
+match_arm_blocks = true
+match_block_trailing_comma = false
+# Overflow behavior
+overflow_delimited_expr = true
+
+# =============================================================================
+# Struct & Enum Formatting
+# =============================================================================
+# Struct literal formatting
+struct_lit_single_line = true
+struct_lit_width = 40
+# Struct field alignment for readability
+struct_field_align_threshold = 20
+# Enum variant formatting
+enum_discrim_align_threshold = 20
+
+# =============================================================================
+# Comments & Documentation
+# =============================================================================
+# Normalize comment style
+normalize_comments = true
+normalize_doc_attributes = true
+# Wrap comments at max width
+wrap_comments = true
+# Format doc comments nicely
+format_code_in_doc_comments = true
+# Format doc comment examples
+doc_comment_code_block_width = 100
+
+# =============================================================================
+# Macros
+# =============================================================================
+# Format macro definitions
+format_macro_matchers = true
+format_macro_bodies = true
+# Format string literals in macros
+format_strings = true
+
+# =============================================================================
+# Spacing & Indentation
+# =============================================================================
+# Use spaces for indentation (standard Rust)
+hard_tabs = false
+tab_spaces = 4
+# Newlines
+newline_style = "Unix"
+# Blank lines
+blank_lines_upper_bound = 2
+blank_lines_lower_bound = 0
+
+# =============================================================================
+# Chains & Method Calls
+# =============================================================================
+# Method chain formatting for fluent APIs
+chain_width = 80
+# Single line chains when short
+chains_overflow_last = true
+# Indent for method chains
+indent_style = "Block"
+
+# =============================================================================
+# Arrays, Slices & Collections
+# =============================================================================
+# Array formatting
+array_width = 80
+# Use trailing commas in arrays/slices for better diffs
+trailing_comma = "Vertical"
+# Format closure bodies
+condense_wildcard_suffixes = true
+
+# =============================================================================
+# Where Clauses & Generics
+# =============================================================================
+# Where clause formatting for generics
+where_single_line = false
+# Indent where clause predicates
+indent_style = "Block"
+
+# =============================================================================
+# Whitespace & Empty Lines
+# =============================================================================
+# Remove trailing whitespace
+trailing_whitespace = "Remove"
+# Empty line handling
+empty_item_single_line = true
+# Space before/after colons
+space_before_colon = false
+space_after_colon = true
+# Spaces around ranges
+spaces_around_ranges = false
+
+# =============================================================================
+# Type Annotations
+# =============================================================================
+# Type formatting
+type_punctuation_density = "Wide"
+# Use short array notation where possible
+use_field_init_shorthand = true
+# Try to fit on one line
+use_try_shorthand = true
+
+# =============================================================================
+# Module & Item Organization
+# =============================================================================
+# Reorder items in modules (keep consistency)
+reorder_impl_items = false  # Keep manual ordering for hot/cold paths
+# Format module-level items
+module_item_order = "Mixed"  # Allow manual organization for performance
+
+# =============================================================================
+# Unsafe & FFI
+# =============================================================================
+# No special formatting for unsafe - treat it normally
+# (unsafe should stand out via syntax highlighting, not formatting)
+
+# =============================================================================
+# Performance-Specific Settings
+# =============================================================================
+# For performance-critical code, we want:
+# - Clear visibility of hot paths (no excessive line breaks)
+# - Compact initialization code
+# - Clear data structure layouts
+
+# Allow slightly wider expressions in hot paths
+short_array_element_width_threshold = 15
+
+# =============================================================================
+# Ignored Patterns
+# =============================================================================
+# Don't format these patterns (add as needed)
+# ignore = []
+
+# =============================================================================
+# NOTES FOR DEVELOPERS
+# =============================================================================
+#
+# 1. Running rustfmt:
+#    - Format entire project: cargo fmt
+#    - Check without modifying: cargo fmt -- --check
+#    - Format specific file: rustfmt src/file.rs
+#
+# 2. Disabling formatting (use sparingly):
+#    - Single line: #[rustfmt::skip]
+#    - Region: #[rustfmt::skip::macros(macro_name)]
+#    - Only use for: ASCII art, manual alignment tables, macro edge cases
+#
+# 3. CI Integration:
+#    - Already configured in .github/workflows/ci.yml
+#    - Runs on: cargo fmt --all -- --check
+#
+# 4. IDE Integration:
+#    - VSCode: Install rust-analyzer extension
+#    - IntelliJ: Built-in Rust plugin
+#    - Format on save recommended
+#
+# 5. Performance Considerations:
+#    - Formatting doesn't affect runtime performance
+#    - Consistent style improves code review speed
+#    - Clear formatting helps with optimization work
+#
+# =============================================================================

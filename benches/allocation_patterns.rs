@@ -12,7 +12,7 @@ fn benchmark_allocation_patterns(c: &mut Criterion) {
             for &size in &sizes {
                 let buf = pool.get(size);
                 black_box(&buf);
-                pool.put(buf);
+                drop(buf);
             }
         });
     });
@@ -50,7 +50,7 @@ fn benchmark_allocation_patterns(c: &mut Criterion) {
             }
             for buf in bufs {
                 black_box(&buf);
-                pool.put(buf);
+                drop(buf);
             }
         });
     });
@@ -98,7 +98,7 @@ fn benchmark_burst_allocations(c: &mut Criterion) {
                 bufs.push(pool.get(size));
             }
             for buf in bufs {
-                pool.put(buf);
+                drop(buf);
             }
         });
     });
@@ -152,7 +152,7 @@ fn benchmark_zipf_distribution(c: &mut Criterion) {
                 for _ in 0..count {
                     let buf = pool.get(size);
                     black_box(&buf);
-                    pool.put(buf);
+                    drop(buf);
                 }
             }
         });

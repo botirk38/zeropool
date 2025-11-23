@@ -130,7 +130,7 @@ impl BufferPool {
     /// let pool = BufferPool::new();
     /// let buffer = pool.get(1024 * 1024);
     /// // ... use buffer ...
-    /// pool.put(buffer);
+    /// // Buffer automatically returned when it goes out of scope
     /// ```
     #[inline]
     pub fn new() -> Self {
@@ -181,22 +181,25 @@ impl BufferPool {
         SHARD_AFFINITY.with(|affinity| {
             if let Some(idx) = affinity.get() {
                 // Fast path: affinity already computed
-                idx
-            } else {
-                // Cold path: compute affinity once per thread
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                thread::current().id().hash(&mut hasher);
-                let idx = (hasher.finish() as usize) & self.shard_mask;
-                affinity.set(Some(idx));
-                idx
+                // Validate that cached affinity is valid for this pool's shard count
+                if idx < self.shards.len() {
+                    return idx;
+                }
+                // Cached affinity is stale (from a pool with more shards), recompute
             }
+            // Cold path: compute affinity once per thread
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            thread::current().id().hash(&mut hasher);
+            let idx = (hasher.finish() as usize) & self.shard_mask;
+            affinity.set(Some(idx));
+            idx
         })
     }
 
     /// Get a buffer of at least the specified size from the pool
     ///
-    /// Returns an owned `Vec<u8>` with length set to `size`. The buffer may have
-    /// larger capacity than requested for reuse efficiency.
+    /// Returns a `PooledBuffer` that automatically returns to the pool when dropped.
+    /// The buffer may have larger capacity than requested for reuse efficiency.
     ///
     /// # Performance
     ///
@@ -204,13 +207,26 @@ impl BufferPool {
     /// 2. **Fast**: Shared pool shard LIFO + first-fit fallback
     /// 3. **Fallback**: New allocation
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zeropool::BufferPool;
+    ///
+    /// let pool = BufferPool::new();
+    /// {
+    ///     let mut buffer = pool.get(1024);
+    ///     buffer[0] = 42;
+    ///     // Buffer automatically returned here
+    /// }
+    /// ```
+    ///
     /// # Panics
     ///
     /// This method may panic if internal invariants are violated (buffer found but cannot be removed).
     /// In practice, this should never occur under normal usage.
     #[inline]
     #[must_use]
-    pub fn get(&self, size: usize) -> Vec<u8> {
+    pub fn get(&self, size: usize) -> crate::buffer::PooledBuffer {
         // Fastest path: thread-local cache (lock-free)
         let tls_hit = TLS_CACHE.with(|tls| {
             let mut cache = tls.borrow_mut();
@@ -222,12 +238,8 @@ impl BufferPool {
                 let mut entry = cache.buffers.pop().unwrap();
                 entry.mark_accessed(); // NEW: Track access
                 let mut buf = entry.buffer;
-                // SAFETY: Buffer capacity >= size (verified above), and we're reusing
-                // a pooled buffer. The capacity check guarantees this is safe.
-                // Note: Buffer may contain uninitialized or previous data, but this
-                // doesn't cause UB - caller gets valid memory they can write to.
-                assert!(buf.capacity() >= size, "Buffer capacity check failed");
-                unsafe { buf.set_len(size) };
+                // Resize buffer to requested size, zeroing memory in the process
+                buf.resize(size, 0);
                 return Some(buf);
             }
 
@@ -236,19 +248,15 @@ impl BufferPool {
                 let mut entry = cache.buffers.swap_remove(idx);
                 entry.mark_accessed(); // NEW: Track access
                 let mut buf = entry.buffer;
-                // SAFETY: capacity >= size guaranteed by position() predicate
-                assert!(
-                    buf.capacity() >= size,
-                    "Buffer capacity check failed in first-fit"
-                );
-                unsafe { buf.set_len(size) };
+                // Resize buffer to requested size, zeroing memory in the process
+                buf.resize(size, 0);
                 return Some(buf);
             }
             None
         });
 
         if let Some(buf) = tls_hit {
-            return buf;
+            return crate::buffer::PooledBuffer::new(buf, self.clone());
         }
 
         // Fast path: try shared pool (sharded to reduce contention)
@@ -267,50 +275,40 @@ impl BufferPool {
             shard.count.fetch_sub(1, Ordering::Relaxed);
             entry.mark_accessed(); // NEW: Track access
             let mut buffer = entry.buffer;
-            // SAFETY: capacity >= size verified above
-            assert!(
-                buffer.capacity() >= size,
-                "Buffer capacity check failed in shared pool LIFO"
-            );
-            unsafe { buffer.set_len(size) };
-            return buffer;
+            // Resize buffer to requested size, zeroing memory in the process
+            buffer.resize(size, 0);
+            return crate::buffer::PooledBuffer::new(buffer, self.clone());
         }
 
         // First-fit fallback: scan for compatible buffer
-        if let Some(idx) = buffers.iter().position(|e| e.capacity() >= size) {
+        let vec = if let Some(idx) = buffers.iter().position(|e| e.capacity() >= size) {
             let mut entry = buffers.swap_remove(idx);
             shard.count.fetch_sub(1, Ordering::Relaxed);
             entry.mark_accessed(); // NEW: Track access
             let mut buffer = entry.buffer;
-            // SAFETY: capacity >= size guaranteed by position() predicate
-            assert!(
-                buffer.capacity() >= size,
-                "Buffer capacity check failed in shared pool first-fit"
-            );
-            unsafe { buffer.set_len(size) };
+            // Resize buffer to requested size, zeroing memory in the process
+            buffer.resize(size, 0);
             buffer
         } else {
             drop(buffers);
             vec![0u8; size]
-        }
+        };
+
+        crate::buffer::PooledBuffer::new(vec, self.clone())
     }
 
-    /// Return a buffer to the pool for reuse
+    /// Return a buffer to the pool for reuse (internal use only)
     ///
-    /// The buffer is cleared but capacity is preserved. Small buffers (below `min_size`)
+    /// This method is called automatically by `PooledBuffer::drop()`.
+    /// Users should not call this directly.
+    ///
+    /// The buffer is zeroed and cleared to prevent information leakage.
+    /// Capacity is preserved. Small buffers (below `min_size`)
     /// are automatically discarded.
-    ///
-    /// # Performance
-    ///
-    /// Prefer returning buffers to thread-local cache (lock-free) before falling back
-    /// to the shared pool.
-    ///
-    /// # Panics
-    ///
-    /// This method may panic if the TLS cache is in an invalid state.
-    /// In practice, this should never occur under normal usage.
     #[inline]
-    pub fn put(&self, mut buffer: Vec<u8>) {
+    pub(crate) fn put(&self, mut buffer: Vec<u8>) {
+        // Zero the buffer memory to prevent information leakage
+        buffer.fill(0);
         // Clear length but keep capacity
         buffer.clear();
 
@@ -416,8 +414,8 @@ impl BufferPool {
 
             // Pin buffer memory if enabled
             if self.config.pinned_memory {
-                // Need to set length temporarily for pinning
-                unsafe { buf.set_len(buf.capacity()) };
+                // Need to set length for pinning, using safe resize
+                buf.resize(buf.capacity(), 0);
                 pin_buffer(&buf);
                 buf.clear();
             }
@@ -483,11 +481,14 @@ impl BufferPool {
     /// ```
     /// use zeropool::BufferPool;
     ///
-    /// let pool = BufferPool::new();
+    /// let pool = BufferPool::builder().min_buffer_size(0).build();
     ///
-    /// // Put some buffers in the pool
-    /// pool.put(vec![0u8; 1024]);
-    /// pool.put(vec![0u8; 2048]);
+    /// // Get and return some buffers to the pool
+    /// {
+    ///     let _buf1 = pool.get(1024);
+    ///     let _buf2 = pool.get(2048);
+    ///     // Buffers automatically returned when dropped
+    /// }
     ///
     /// // Clear all buffers from the shared pool
     /// pool.clear();

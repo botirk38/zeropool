@@ -10,7 +10,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
         b.iter(|| {
             let mut buf = pool.get(size);
             black_box(&mut buf);
-            pool.put(buf);
+            drop(buf);
         });
     });
 
@@ -19,7 +19,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
         b.iter(|| {
             let mut buf = pool.get(size);
             black_box(&mut buf);
-            pool.put(buf);
+            drop(buf);
         });
     });
 
@@ -29,7 +29,7 @@ fn benchmark_pinned_memory(c: &mut Criterion) {
         b.iter(|| {
             let mut buf = pool.get(size);
             black_box(&mut buf);
-            pool.put(buf);
+            drop(buf);
         });
     });
 
@@ -56,7 +56,7 @@ fn benchmark_preallocation_effectiveness(c: &mut Criterion) {
                     }
                     for buf in bufs {
                         black_box(&buf);
-                        pool.put(buf);
+                        drop(buf);
                     }
                 });
             },
@@ -88,7 +88,7 @@ fn benchmark_memory_pressure(c: &mut Criterion) {
 
                     // Return all - pool should manage the overflow
                     for buf in bufs {
-                        pool.put(buf);
+                        drop(buf);
                     }
                 });
             },
@@ -118,7 +118,7 @@ fn benchmark_shard_scaling(c: &mut Criterion) {
                     }
                     for buf in bufs {
                         black_box(&buf);
-                        pool.put(buf);
+                        drop(buf);
                     }
                 });
             },
@@ -148,8 +148,8 @@ fn benchmark_min_buffer_size_filtering(c: &mut Criterion) {
                     black_box(&small_buf);
                     black_box(&large_buf);
 
-                    pool.put(small_buf);
-                    pool.put(large_buf);
+                    drop(small_buf);
+                    drop(large_buf);
                 });
             },
         );

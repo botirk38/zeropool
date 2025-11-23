@@ -50,7 +50,19 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Run Clippy with all targets and features
+      # This uses the clippy.toml configuration for lint levels
+      - name: Run Clippy (all targets)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Additional check: Clippy for tests with extra scrutiny
+      - name: Run Clippy (tests)
+        run: cargo clippy --tests --all-features -- -D warnings
+
+      # Additional check: Clippy for benchmarks
+      - name: Run Clippy (benchmarks)
+        run: cargo clippy --benches --all-features -- -D warnings
 
   docs:
     name: Docs

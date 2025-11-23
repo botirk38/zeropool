@@ -20,14 +20,13 @@ use zeropool::BufferPool;
 
 let pool = BufferPool::new();
 
-// Get a buffer
+// Get a buffer (automatically returned to pool when dropped)
 let mut buffer = pool.get(1024 * 1024); // 1MB
 
 // Use it
 file.read(&mut buffer)?;
 
-// Return it
-pool.put(buffer);
+// Buffer automatically returned to pool here
 ```
 
 ## Performance Highlights
@@ -180,10 +179,10 @@ cargo bench
 - O(1) instead of O(n) best-fit
 - Perfect for predictable I/O buffer sizes
 
-**Zero-fill skip**
-- Safe `unsafe` via capacity-checked `set_len()`
-- I/O immediately overwrites buffers
-- ~40% of the speedup vs `Vec::with_capacity`
+**Secure memory zeroing**
+- All buffers are zeroed on return and allocation
+- Prevents information leakage between buffer users
+- Safe for security-sensitive workloads
 
 ## Thread Safety
 
@@ -202,23 +201,25 @@ for _ in 0..4 {
 }
 ```
 
-## Safety Guarantees
+## Safety and Security
 
-Uses `unsafe` internally to skip zero-fills:
+ZeroPool prioritizes both safety and security:
 
-```rust
-// SAFE: capacity checked before set_len()
-if buffer.capacity() >= size {
-    unsafe { buffer.set_len(size); }
-}
-```
+**Memory Zeroing**:
+- All buffers are explicitly zeroed when returned to the pool using `fill(0)`
+- All buffers are zeroed when allocated from the pool using `resize(size, 0)`
+- Prevents information leakage between different buffer users
+- Safe for processing sensitive data (credentials, encryption keys, PII)
 
-**Why this is safe**:
-- Capacity verified before length modification
-- Buffers immediately overwritten by I/O operations
-- No reads before writes in typical I/O patterns
+**Safe Rust**:
+- Uses only safe Rust operations for memory management
+- No unsafe `set_len()` calls or uninitialized memory
+- The only unsafe code is for safe trait implementations (`Send`/`Sync`)
 
-All unsafe code is documented and audited.
+**Security Best Practices**:
+- Defense-in-depth with zeroing at both allocation and deallocation
+- Optional memory pinning to prevent swapping sensitive data to disk
+- Suitable for security-critical applications
 
 ## Use Cases
 

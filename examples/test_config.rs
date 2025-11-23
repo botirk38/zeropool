@@ -18,9 +18,11 @@ fn main() {
     println!("Pool has {} buffers", custom_pool.len());
 
     // Test buffer operations
-    let buf = custom_pool.get(1024 * 1024);
-    println!("\nGot buffer of size {} bytes", buf.len());
-    custom_pool.put(buf);
+    {
+        let buf = custom_pool.get(1024 * 1024);
+        println!("\nGot buffer of size {} bytes", buf.len());
+        // Buffer automatically returned to pool when dropped
+    }
     println!("Returned buffer to pool");
     println!("Pool now has {} buffers", custom_pool.len());
 }

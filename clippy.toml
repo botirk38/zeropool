@@ -1,0 +1,160 @@
+# Clippy Configuration for ZeroPool
+# High-performance, thread-safe buffer pool library
+# Edition: 2024 | Strictness: Balanced | Focus: Performance + Safety
+
+# =============================================================================
+# Cognitive Complexity Thresholds
+# =============================================================================
+# Allow slightly higher complexity for performance-critical hot paths
+cognitive-complexity-threshold = 25
+# Default type complexity is fine for generic pool implementations
+type-complexity-threshold = 500
+
+# =============================================================================
+# Naming Conventions
+# =============================================================================
+# Enforce consistent naming (but allow common abbreviations)
+upper-case-acronyms-aggressive = false
+# Allow single-char variable names in tight loops (i, j, k for performance)
+single-char-binding-names-threshold = 4
+
+# =============================================================================
+# Documentation Requirements
+# =============================================================================
+# Enforce documentation for all public items
+missing-docs-in-crate-items = true
+# Maximum line length for doc comments
+doc-valid-idents = ["ZeroPool", "LIFO", "CLOCK", "TLS", "mlock", "TiB"]
+
+# =============================================================================
+# Performance Tuning
+# =============================================================================
+# Be aggressive about performance lints (this is a perf-critical library)
+too-many-arguments-threshold = 7
+# Allow moderate vector size for initialization
+vec-box-size-threshold = 4096
+# Stack size threshold for arrays (correct name: too-large-for-stack)
+too-large-for-stack = 16384
+
+# =============================================================================
+# Safety & Correctness
+# =============================================================================
+# Strict enum variant name checking
+enum-variant-name-threshold = 3
+
+# =============================================================================
+# Code Organization
+# =============================================================================
+# Allow up to 150 lines for complex initialization functions
+too-many-lines-threshold = 150
+# Struct field count (pools have many config fields) - correct name: max-struct-bools
+max-struct-bools = 4
+
+# =============================================================================
+# Import & Module Settings
+# =============================================================================
+# Enforce consistent import ordering
+max-suggested-slice-pattern-length = 3
+
+# =============================================================================
+# Literal & Magic Number Configuration
+# =============================================================================
+# Allow some magic numbers in performance-critical code (shard counts, etc.)
+# These should still be well-documented
+literal-representation-threshold = 16
+
+# =============================================================================
+# Error Handling
+# =============================================================================
+# Be strict about error handling in public APIs (correct name: large-error-threshold)
+# Internal panics are acceptable for invariant violations
+large-error-threshold = 128
+
+# =============================================================================
+# ALLOWED LINTS (Pragmatic Exceptions)
+# =============================================================================
+# These lints are explicitly allowed for valid reasons in performance code
+
+# Performance & Optimization
+# - inline_always: Used deliberately for hot-path functions
+# - cast_possible_truncation: Intentional in shard indexing with masking
+# - cast_precision_loss: Acceptable for statistics/metrics
+# - module_name_repetition: Common in Rust libraries (pool::Pool)
+
+# Complexity (for hot paths)
+# - too_many_lines: Some functions are long but linear (initialization)
+# - similar_names: shard/shard_idx, buf/buffer are clear in context
+
+# Style (team preference)
+# - must_use_candidate: Too noisy, prefer explicit annotations
+# - return_self_not_must_use: Builder pattern returns Self intentionally
+# - missing_errors_doc: Will be handled separately for public API
+
+# Safety
+# - multiple_unsafe_ops_per_block: Sometimes needed for atomicity
+# - undocumented_safety: DENY this, but keep config flexible
+
+# =============================================================================
+# LINT LEVELS (Configured in Cargo.toml)
+# =============================================================================
+# This file contains Clippy-specific configuration options.
+# Lint levels (warn/deny/allow) should be set in Cargo.toml [lints.clippy]
+# or via #![warn(...)] / #![deny(...)] attributes in source files.
+#
+# Recommended configuration for Cargo.toml:
+#
+# [lints.rust]
+# unsafe_code = "warn"  # Allow but scrutinize
+# missing_docs = "warn" # Enforce for public API
+#
+# [lints.clippy]
+# # DENY: Critical correctness and safety issues
+# correctness = "deny"
+# suspicious = "deny"
+# perf = "deny"
+# undocumented_unsafe_blocks = "deny"
+#
+# # WARN: Code quality and style
+# all = "warn"
+# pedantic = "warn"
+# complexity = "warn"
+# style = "warn"
+# cargo = "warn"
+#
+# # ALLOW: Pragmatic exceptions for performance
+# inline_always = "allow"
+# module_name_repetition = "allow"
+# cast_possible_truncation = "allow"
+# cast_precision_loss = "allow"
+# too_many_lines = "allow"
+# missing_errors_doc = "allow"
+# must_use_candidate = "allow"
+# return_self_not_must_use = "allow"
+# similar_names = "allow"
+# multiple_unsafe_ops_per_block = "allow"
+#
+# =============================================================================
+# NOTES FOR DEVELOPERS
+# =============================================================================
+#
+# 1. Unsafe Code Policy:
+#    - All unsafe blocks MUST have SAFETY comments
+#    - Prefer safe abstractions when performance cost < 5%
+#    - Benchmark before and after unsafe optimizations
+#
+# 2. Performance Guidelines:
+#    - Use #[inline] for functions < 20 lines called in hot paths
+#    - Use #[inline(always)] only for trivial getters/setters
+#    - Profile before adding complexity for performance
+#
+# 3. Documentation Standards:
+#    - All public items require doc comments
+#    - Include examples for non-trivial functions
+#    - Document panics, safety, and errors clearly
+#
+# 4. Testing Requirements:
+#    - All public functions must have tests
+#    - Unsafe code requires extra test coverage
+#    - Benchmark changes that affect hot paths
+#
+# =============================================================================
