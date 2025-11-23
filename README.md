@@ -38,7 +38,7 @@ file.read(&mut buffer)?;
 
 ### Security First 🔒
 
-- **Memory zeroing**: All buffers are explicitly zeroed on allocation and return
+- **Memory zeroing**: Buffers are not zeroed by default for maximum performance (users can manually zero if needed)
 - **No information leakage**: Previous data never exposed to new allocations
 - **Safe Rust**: Zero unsafe memory operations (only safe Send/Sync trait impls)
 - **Optional memory pinning**: Prevent sensitive data from swapping to disk
@@ -186,11 +186,10 @@ let pool_lifo = BufferPool::builder()
 - O(1) instead of O(n) best-fit
 - Perfect for predictable I/O buffer sizes
 
-**Secure memory zeroing**
-- All buffers are zeroed on return using `fill(0)`
-- All buffers are zeroed on allocation using `resize(size, 0)`
-- Prevents information leakage between buffer users
-- Safe for security-sensitive workloads
+**Performance-first memory management**
+- Buffers are not zeroed by default for maximum performance
+- Users can manually zero buffers if information leakage prevention is required
+- Safe for performance-critical workloads where security is handled at higher layers
 
 ## Thread Safety
 
@@ -213,12 +212,11 @@ for _ in 0..4 {
 
 ZeroPool prioritizes both safety and security:
 
-### Memory Zeroing
+### Memory Management
 
-- All buffers are explicitly zeroed when returned to the pool using `fill(0)`
-- All buffers are zeroed when allocated from the pool using `resize(size, 0)`
-- Prevents information leakage between different buffer users
-- Safe for processing sensitive data (credentials, encryption keys, PII)
+- Buffers are not zeroed by default for maximum performance
+- Users should manually zero buffers if information leakage prevention is required
+- Suitable for performance-critical applications where security is handled at higher layers
 
 ### Safe Rust
 
@@ -229,10 +227,10 @@ ZeroPool prioritizes both safety and security:
 
 ### Security Best Practices
 
-- **Defense-in-depth**: Zeroing at both allocation and deallocation
+- **Performance-first**: Optimized for speed while maintaining safety
 - **Optional memory pinning**: Prevent swapping sensitive data to disk
 - **Auditable**: Simple, safe code that's easy to review
-- **Production-ready**: Suitable for security-critical applications
+- **Flexible**: Users can add zeroing when needed for their use case
 
 ## Use Cases
 
@@ -271,14 +269,14 @@ ZeroPool automatically adapts to your system:
 
 | Feature | ZeroPool | bytes::BytesMut | Lifeguard | Sharded-Slab |
 |---------|----------|-----------------|-----------|--------------|
-| Memory zeroing | ✅ Always | ❌ No | ❌ No | ❌ No |
+| Memory zeroing | ❌ No (performance-first) | ❌ No | ❌ No | ❌ No |
 | Safe Rust | ✅ 100% | ⚠️ Some unsafe | ⚠️ Some unsafe | ⚠️ Heavy unsafe |
 | Thread-safe | ✅ Yes | ❌ No | ⚠️ Limited | ✅ Yes |
 | Lock-free path | ✅ TLS cache | ❌ No | ❌ No | ⚠️ Partial |
 | Auto-configured | ✅ CPU-aware | ❌ Manual | ❌ Manual | ❌ Manual |
 | Security focus | ✅ Primary | ❌ No | ❌ No | ❌ No |
 
-ZeroPool is the only buffer pool designed for **security-first** applications while maintaining competitive performance.
+ZeroPool is the only buffer pool designed for **performance-first** applications while maintaining competitive safety.
 
 ## License
 

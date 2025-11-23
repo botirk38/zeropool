@@ -238,8 +238,11 @@ impl BufferPool {
                 let mut entry = cache.buffers.pop().unwrap();
                 entry.mark_accessed(); // NEW: Track access
                 let mut buf = entry.buffer;
-                // Resize buffer to requested size, zeroing memory in the process
-                buf.resize(size, 0);
+                // Resize buffer to requested size, without zeroing
+                // SAFETY: Buffer was previously allocated with at least this capacity
+                unsafe {
+                    buf.set_len(size);
+                }
                 return Some(buf);
             }
 
@@ -248,8 +251,11 @@ impl BufferPool {
                 let mut entry = cache.buffers.swap_remove(idx);
                 entry.mark_accessed(); // NEW: Track access
                 let mut buf = entry.buffer;
-                // Resize buffer to requested size, zeroing memory in the process
-                buf.resize(size, 0);
+                // Resize buffer to requested size, without zeroing
+                // SAFETY: Buffer was previously allocated with at least this capacity
+                unsafe {
+                    buf.set_len(size);
+                }
                 return Some(buf);
             }
             None
@@ -263,7 +269,7 @@ impl BufferPool {
         let shard_idx = self.get_shard_index();
         // SAFETY: get_shard_index() uses bitmask (shard_mask = num_shards - 1) where
         // num_shards is power of 2, guaranteeing shard_idx < shards.len()
-        assert!(shard_idx < self.shards.len(), "Shard index out of bounds");
+        debug_assert!(shard_idx < self.shards.len(), "Shard index out of bounds");
         let shard = &self.shards[shard_idx];
         let mut buffers = shard.buffers.lock();
 
@@ -275,8 +281,11 @@ impl BufferPool {
             shard.count.fetch_sub(1, Ordering::Relaxed);
             entry.mark_accessed(); // NEW: Track access
             let mut buffer = entry.buffer;
-            // Resize buffer to requested size, zeroing memory in the process
-            buffer.resize(size, 0);
+            // Resize buffer to requested size, without zeroing
+            // SAFETY: Buffer was previously allocated with at least this capacity
+            unsafe {
+                buffer.set_len(size);
+            }
             return crate::buffer::PooledBuffer::new(buffer, self.clone());
         }
 
@@ -286,12 +295,22 @@ impl BufferPool {
             shard.count.fetch_sub(1, Ordering::Relaxed);
             entry.mark_accessed(); // NEW: Track access
             let mut buffer = entry.buffer;
-            // Resize buffer to requested size, zeroing memory in the process
-            buffer.resize(size, 0);
+            // Resize buffer to requested size, without zeroing
+            // SAFETY: Buffer was previously allocated with at least this capacity
+            unsafe {
+                buffer.set_len(size);
+            }
             buffer
         } else {
             drop(buffers);
-            vec![0u8; size]
+            // SAFETY: We allocate uninitialized memory for performance, avoiding zeroing
+            let mut v = Vec::<std::mem::MaybeUninit<u8>>::with_capacity(size);
+            // SAFETY: Setting length on capacity-allocated vector creates uninitialized but valid memory
+            unsafe {
+                v.set_len(size);
+                // Transmute to Vec<u8> - the memory is uninitialized but that's intentional
+                std::mem::transmute::<Vec<std::mem::MaybeUninit<u8>>, Vec<u8>>(v)
+            }
         };
 
         crate::buffer::PooledBuffer::new(vec, self.clone())
@@ -302,14 +321,12 @@ impl BufferPool {
     /// This method is called automatically by `PooledBuffer::drop()`.
     /// Users should not call this directly.
     ///
-    /// The buffer is zeroed and cleared to prevent information leakage.
+    /// The buffer is cleared (but not zeroed for performance) to prepare for reuse.
     /// Capacity is preserved. Small buffers (below `min_size`)
     /// are automatically discarded.
     #[inline]
     pub(crate) fn put(&self, mut buffer: Vec<u8>) {
-        // Zero the buffer memory to prevent information leakage
-        buffer.fill(0);
-        // Clear length but keep capacity
+        // Clear length but keep capacity (no zeroing for performance)
         buffer.clear();
 
         // Initialize TLS limit on first use (cold path, happens once per thread)
@@ -353,7 +370,7 @@ impl BufferPool {
 
         let shard_idx = self.get_shard_index();
         // SAFETY: shard_idx guaranteed in bounds by bitmask operation in get_shard_index()
-        assert!(shard_idx < self.shards.len(), "Shard index out of bounds in put");
+        debug_assert!(shard_idx < self.shards.len(), "Shard index out of bounds in put");
         let shard = &self.shards[shard_idx];
         let mut buffers = shard.buffers.lock();
 
@@ -411,8 +428,11 @@ impl BufferPool {
 
             // Pin buffer memory if enabled
             if self.config.pinned_memory {
-                // Need to set length for pinning, using safe resize
-                buf.resize(buf.capacity(), 0);
+                // Need to set length for pinning, without zeroing
+                // SAFETY: Buffer was allocated with capacity, setting length creates uninitialized memory
+                unsafe {
+                    buf.set_len(buf.capacity());
+                }
                 pin_buffer(&buf);
                 buf.clear();
             }
@@ -424,7 +444,10 @@ impl BufferPool {
         // Process shards in reverse order to avoid index shifting during drain
         for shard_idx in (0..self.config.num_shards).rev() {
             // SAFETY: shard_idx < num_shards by loop bounds
-            assert!(shard_idx < self.shards.len(), "Shard index out of bounds in preallocate");
+            debug_assert!(
+                shard_idx < self.shards.len(),
+                "Shard index out of bounds in preallocate"
+            );
             let shard = &self.shards[shard_idx];
             let mut buffers = shard.buffers.lock();
             buffers.reserve(per_shard);

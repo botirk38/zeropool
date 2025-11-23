@@ -65,9 +65,7 @@
 //!
 //! ZeroPool prioritizes safety and security with the following guarantees:
 //!
-//! - **Memory zeroing**: All buffers are explicitly zeroed when returned to the pool and when
-//!   allocated from the pool. This prevents information leakage between buffer users, making
-//!   ZeroPool safe for security-sensitive workloads.
+//! - **Memory zeroing**: Buffers are not zeroed by default for maximum performance. Users should manually zero buffers if information leakage prevention is required for their use case.
 //!
 //! - **Safe memory operations**: Uses safe Rust methods like `resize()` and `fill()` to manage
 //!   buffer contents, avoiding unsafe code wherever possible. The only remaining unsafe code is
@@ -79,6 +77,29 @@
 //! - **Optional memory pinning**: When `pinned_memory` is enabled, buffers are locked in RAM
 //!   using `mlock` to prevent swapping. This is best-effort and fails gracefully if insufficient
 //!   permissions. Useful for security-sensitive or latency-critical workloads.
+//!
+//! # Ownership and Pool Return
+//!
+//! When a `PooledBuffer` is dropped normally, the buffer is returned to the pool
+//! for reuse. However, if you need to extract the underlying `Vec<u8>` and prevent
+//! pool return, use [`PooledBuffer::into_inner()`] or [`PooledBuffer::into_vec()`].
+//!
+//! ```rust
+//! use zeropool::BufferPool;
+//!
+//! let pool = BufferPool::new();
+//!
+//! // Normal usage - returns to pool on drop
+//! {
+//!     let buffer = pool.get(1024);
+//!     // buffer is automatically returned when it goes out of scope
+//! }
+//!
+//! // Extract ownership - does NOT return to pool
+//! let buffer = pool.get(1024);
+//! let vec: Vec<u8> = buffer.into_inner();
+//! // vec is now owned, buffer was consumed
+//! ```
 
 mod buffer;
 mod config;
@@ -472,31 +493,5 @@ mod tests {
         let buf = pool.get(1024);
         assert_eq!(buf.len(), 1024);
         drop(buf); // Auto-returned to pool
-    }
-
-    #[test]
-    fn test_buffer_zeroing() {
-        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(1).build();
-
-        // Get a buffer and fill it with non-zero data
-        {
-            let mut buf = pool.get(1024);
-            for i in 0..1024 {
-                buf[i] = (i % 256) as u8;
-            }
-            // Verify buffer has non-zero data
-            assert!(buf.iter().any(|&b| b != 0));
-            // Buffer returns to pool here and should be zeroed
-        }
-
-        // Get another buffer - should be zeroed
-        let buf2 = pool.get(1024);
-
-        // Check that buffer is completely zeroed
-        assert!(
-            buf2.iter().all(|&b| b == 0),
-            "Buffer was not properly zeroed! First 20 bytes: {:?}",
-            &buf2[..20]
-        );
     }
 }

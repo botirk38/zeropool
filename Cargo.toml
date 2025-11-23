@@ -84,6 +84,10 @@ option_if_let_else = "allow" # Sometimes more readable
 parking_lot = "0.12.5"
 region = "3.0"
 
+# Optional tokio-uring support
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = { version = "0.5", optional = true }
+
 [dev-dependencies]
 criterion = "0.7"
 sharded-slab = "0.1"
@@ -93,8 +97,9 @@ deadpool = "0.12"
 tokio = { version = "1", features = ["rt", "macros"] }
 object-pool = "0.6"
 
-[profile.bench]
-debug = true
+[features]
+default = []
+tokio-uring = ["dep:tokio-uring"]
 
 [profile.profiling]
 inherits = "release"
