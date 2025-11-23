@@ -46,10 +46,7 @@ impl PooledBuffer {
     ///
     /// This is an internal method used by `BufferPool::get()`.
     pub(crate) fn new(buffer: Vec<u8>, pool: BufferPool) -> Self {
-        Self {
-            buffer: Some(buffer),
-            pool,
-        }
+        Self { buffer: Some(buffer), pool }
     }
 
     /// Returns the length of the buffer in bytes.
@@ -125,7 +122,7 @@ impl AsMut<[u8]> for PooledBuffer {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::BufferPool;
 
     #[test]

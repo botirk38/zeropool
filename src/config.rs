@@ -197,9 +197,7 @@ impl Builder {
     ///
     /// Panics if `tls_cache_size` is set to 0 or `max_buffers_per_shard` is set to 0.
     pub fn build(self) -> crate::BufferPool {
-        let num_cpus = thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(4);
+        let num_cpus = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
 
         let tls_cache_size = self
             .tls_cache_size
@@ -211,10 +209,7 @@ impl Builder {
 
         // Validate configuration
         assert!(tls_cache_size > 0, "tls_cache_size must be greater than 0");
-        assert!(
-            max_buffers_per_shard > 0,
-            "max_buffers_per_shard must be greater than 0"
-        );
+        assert!(max_buffers_per_shard > 0, "max_buffers_per_shard must be greater than 0");
 
         let config = PoolConfig {
             num_shards: self
@@ -222,10 +217,7 @@ impl Builder {
                 .map(|n| {
                     let normalized = next_power_of_2(n).clamp(4, 128);
                     // Verify it's a power of 2 after clamping
-                    debug_assert!(
-                        normalized.is_power_of_two(),
-                        "num_shards must be power of 2"
-                    );
+                    debug_assert!(normalized.is_power_of_two(), "num_shards must be power of 2");
                     normalized
                 })
                 .unwrap_or_else(|| calculate_num_shards(num_cpus)),
@@ -273,9 +265,7 @@ impl Default for PoolConfig {
     /// - `PoolConfig::for_file_io()`
     /// - `PoolConfig::balanced()`
     fn default() -> Self {
-        let num_cpus = thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(4);
+        let num_cpus = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
 
         Self {
             num_shards: calculate_num_shards(num_cpus),

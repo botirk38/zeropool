@@ -106,9 +106,7 @@ fn benchmark_shard_scaling(c: &mut Criterion) {
             BenchmarkId::new("zeropool", num_shards),
             &num_shards,
             |b, &num_shards| {
-                let pool = zeropool::BufferPool::builder()
-                    .num_shards(num_shards)
-                    .build();
+                let pool = zeropool::BufferPool::builder().num_shards(num_shards).build();
 
                 b.iter(|| {
                     // Simulate concurrent access pattern
@@ -136,9 +134,7 @@ fn benchmark_min_buffer_size_filtering(c: &mut Criterion) {
             BenchmarkId::new("zeropool", min_size),
             &min_size,
             |b, &min_size| {
-                let pool = zeropool::BufferPool::builder()
-                    .min_buffer_size(min_size)
-                    .build();
+                let pool = zeropool::BufferPool::builder().min_buffer_size(min_size).build();
 
                 b.iter(|| {
                     // Mix of small and large buffers

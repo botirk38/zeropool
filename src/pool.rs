@@ -353,10 +353,7 @@ impl BufferPool {
 
         let shard_idx = self.get_shard_index();
         // SAFETY: shard_idx guaranteed in bounds by bitmask operation in get_shard_index()
-        assert!(
-            shard_idx < self.shards.len(),
-            "Shard index out of bounds in put"
-        );
+        assert!(shard_idx < self.shards.len(), "Shard index out of bounds in put");
         let shard = &self.shards[shard_idx];
         let mut buffers = shard.buffers.lock();
 
@@ -427,10 +424,7 @@ impl BufferPool {
         // Process shards in reverse order to avoid index shifting during drain
         for shard_idx in (0..self.config.num_shards).rev() {
             // SAFETY: shard_idx < num_shards by loop bounds
-            assert!(
-                shard_idx < self.shards.len(),
-                "Shard index out of bounds in preallocate"
-            );
+            assert!(shard_idx < self.shards.len(), "Shard index out of bounds in preallocate");
             let shard = &self.shards[shard_idx];
             let mut buffers = shard.buffers.lock();
             buffers.reserve(per_shard);
@@ -454,10 +448,7 @@ impl BufferPool {
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
-        self.shards
-            .iter()
-            .map(|s| s.count.load(Ordering::Relaxed))
-            .sum()
+        self.shards.iter().map(|s| s.count.load(Ordering::Relaxed)).sum()
     }
 
     /// Check if all shards are empty
@@ -467,9 +458,7 @@ impl BufferPool {
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.shards
-            .iter()
-            .all(|s| s.count.load(Ordering::Relaxed) == 0)
+        self.shards.iter().all(|s| s.count.load(Ordering::Relaxed) == 0)
     }
 
     /// Clears all buffers from the shared pool

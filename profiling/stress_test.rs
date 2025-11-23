@@ -8,7 +8,6 @@
 /// - Eviction policy stress testing
 ///
 /// Usage: cargo flamegraph --profile profiling --bin stress_test
-
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,7 +17,7 @@ use zeropool::BufferPool;
 const NUM_STRESS_THREADS: usize = 12;
 const STRESS_DURATION_SECS: u64 = 30;
 const BURST_SIZE: usize = 200;
-const THRASH_ITERATIONS: usize = 50000;  // Increased from 5000
+const THRASH_ITERATIONS: usize = 50000; // Increased from 5000
 
 // Size patterns for different stress scenarios
 const SMALL_SIZES: &[usize] = &[64, 128, 256, 512];
@@ -71,7 +70,7 @@ fn main() {
             .tls_cache_size(8)
             .max_buffers_per_shard(64)
             .min_buffer_size(64)
-            .build()
+            .build(),
     );
 
     let total_start = Instant::now();
@@ -101,9 +100,7 @@ fn run_stress_phase(pool: &Arc<BufferPool>, phase: StressPhase) {
     // Spawn stress threads
     for thread_id in 0..NUM_STRESS_THREADS {
         let pool = Arc::clone(pool);
-        let handle = thread::spawn(move || {
-            stress_worker(thread_id, pool, phase)
-        });
+        let handle = thread::spawn(move || stress_worker(thread_id, pool, phase));
         handles.push(handle);
     }
 

@@ -8,13 +8,12 @@
 /// - Realistic ML workload from the README use case
 ///
 /// Usage: cargo flamegraph --profile profiling --bin ml_checkpoint_loader
-
 use std::time::Instant;
 use zeropool::BufferPool;
 
 // Configuration - massively increased for perf profiling
 const TOTAL_MODEL_SIZE_GB: usize = 2;
-const NUM_EPOCHS: usize = 1000;  // Increased to 1000 for perf profiling
+const NUM_EPOCHS: usize = 1000; // Increased to 1000 for perf profiling
 const NUM_LAYERS: usize = 48;
 const METADATA_ITEMS_PER_LAYER: usize = 10;
 

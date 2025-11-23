@@ -10,10 +10,7 @@ fn benchmark_ping_pong_pattern(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{:?}", policy)),
             &policy,
             |b, &policy| {
-                let pool = BufferPool::builder()
-                    .eviction_policy(policy)
-                    .tls_cache_size(10)
-                    .build();
+                let pool = BufferPool::builder().eviction_policy(policy).tls_cache_size(10).build();
 
                 // Preallocate buffers
                 pool.preallocate(20, 1024 * 1024);
@@ -44,10 +41,7 @@ fn benchmark_hot_cold_buffers(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{:?}", policy)),
             &policy,
             |b, &policy| {
-                let pool = BufferPool::builder()
-                    .eviction_policy(policy)
-                    .tls_cache_size(10)
-                    .build();
+                let pool = BufferPool::builder().eviction_policy(policy).tls_cache_size(10).build();
 
                 pool.preallocate(10, 64 * 1024);
 
@@ -84,10 +78,7 @@ fn benchmark_multi_size_workload(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{:?}", policy)),
             &policy,
             |b, &policy| {
-                let pool = BufferPool::builder()
-                    .eviction_policy(policy)
-                    .tls_cache_size(15)
-                    .build();
+                let pool = BufferPool::builder().eviction_policy(policy).tls_cache_size(15).build();
 
                 let sizes = [4 * 1024, 64 * 1024, 1024 * 1024];
 

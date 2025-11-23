@@ -8,23 +8,22 @@
 /// - Realistic I/O workload with data transformations
 ///
 /// Usage: cargo flamegraph --profile profiling --bin file_pipeline
-
 use std::time::Instant;
 use zeropool::BufferPool;
 
 // Configuration - increased for better profiling visibility
-const NUM_FILES: usize = 500;  // Increased from 100
+const NUM_FILES: usize = 500; // Increased from 100
 const CHUNKS_PER_FILE: usize = 50;
 const SIMULATION_RUNS: usize = 3;
 
 // File types with different characteristics
 #[derive(Clone, Copy)]
 enum FileType {
-    SmallText,      // 4KB chunks - logs, configs
-    MediumJson,     // 16KB chunks - structured data
-    LargeImage,     // 64KB chunks - images
-    VideoChunk,     // 256KB chunks - video processing
-    Database,       // 1MB chunks - database dumps
+    SmallText,  // 4KB chunks - logs, configs
+    MediumJson, // 16KB chunks - structured data
+    LargeImage, // 64KB chunks - images
+    VideoChunk, // 256KB chunks - video processing
+    Database,   // 1MB chunks - database dumps
 }
 
 impl FileType {
@@ -86,8 +85,13 @@ fn main() {
         let bytes_processed = process_all_files(&pool);
 
         let run_duration = run_start.elapsed();
-        eprintln!("[Run {}/{}] Completed in {:.2?}, {:.2} GB processed",
-                 run, SIMULATION_RUNS, run_duration, bytes_processed as f64 / 1e9);
+        eprintln!(
+            "[Run {}/{}] Completed in {:.2?}, {:.2} GB processed",
+            run,
+            SIMULATION_RUNS,
+            run_duration,
+            bytes_processed as f64 / 1e9
+        );
     }
 
     let total_duration = total_start.elapsed();

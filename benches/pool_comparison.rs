@@ -64,9 +64,7 @@ fn benchmark_zeropool_multi_thread(c: &mut Criterion) {
     const ITERATIONS_PER_THREAD: usize = 1000;
 
     for num_threads in [2, 4, 8] {
-        group.throughput(Throughput::Bytes(
-            (size * num_threads * ITERATIONS_PER_THREAD) as u64,
-        ));
+        group.throughput(Throughput::Bytes((size * num_threads * ITERATIONS_PER_THREAD) as u64));
 
         group.bench_with_input(
             BenchmarkId::new("zeropool", num_threads),

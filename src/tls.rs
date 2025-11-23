@@ -9,9 +9,7 @@ pub(crate) struct TlsCache {
 
 impl TlsCache {
     pub const fn new() -> Self {
-        Self {
-            buffers: Vec::new(),
-        }
+        Self { buffers: Vec::new() }
     }
 }
 

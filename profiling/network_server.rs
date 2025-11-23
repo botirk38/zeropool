@@ -9,7 +9,6 @@
 /// - Realistic Zipf distribution for packet sizes
 ///
 /// Usage: cargo flamegraph --profile profiling --bin network_server
-
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,7 +16,7 @@ use zeropool::BufferPool;
 
 // Configuration - increased for better profiling visibility
 const NUM_WORKER_THREADS: usize = 8;
-const CONNECTIONS_PER_THREAD: usize = 5000;  // Increased from 1000
+const CONNECTIONS_PER_THREAD: usize = 5000; // Increased from 1000
 const REQUESTS_PER_CONNECTION: usize = 100;
 const SIMULATION_DURATION_SECS: u64 = 30;
 
@@ -28,13 +27,13 @@ const SIMULATION_DURATION_SECS: u64 = 30;
 // - 15% large packets (16KB-32KB): file chunks, images
 // - 5% very large packets (64KB): max TCP segment size
 const PACKET_SIZES: &[(usize, usize)] = &[
-    (64, 50),        // 50% tiny packets
-    (512, 20),       // 20% small packets
-    (1024, 10),      // 10% 1KB packets
-    (4096, 10),      // 10% 4KB packets
-    (16384, 7),      // 7% 16KB packets
-    (32768, 2),      // 2% 32KB packets
-    (65536, 1),      // 1% max size packets
+    (64, 50),   // 50% tiny packets
+    (512, 20),  // 20% small packets
+    (1024, 10), // 10% 1KB packets
+    (4096, 10), // 10% 4KB packets
+    (16384, 7), // 7% 16KB packets
+    (32768, 2), // 2% 32KB packets
+    (65536, 1), // 1% max size packets
 ];
 
 fn main() {
@@ -52,7 +51,7 @@ fn main() {
             .tls_cache_size(6)
             .max_buffers_per_shard(32)
             .min_buffer_size(512) // Keep even small packets
-            .build()
+            .build(),
     );
 
     eprintln!("Pre-allocating buffers...");
@@ -66,9 +65,7 @@ fn main() {
     // Spawn worker threads
     for worker_id in 0..NUM_WORKER_THREADS {
         let pool = Arc::clone(&pool);
-        let handle = thread::spawn(move || {
-            worker_thread(worker_id, pool)
-        });
+        let handle = thread::spawn(move || worker_thread(worker_id, pool));
         handles.push(handle);
     }
 
@@ -156,7 +153,8 @@ fn get_packet_size() -> usize {
     let random = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .subsec_nanos() % 100) as usize;
+        .subsec_nanos()
+        % 100) as usize;
 
     for &(size, weight) in PACKET_SIZES {
         cumulative += weight;

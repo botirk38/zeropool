@@ -184,10 +184,7 @@ mod tests {
 
     #[test]
     fn test_max_pool_size() {
-        let pool = BufferPool::builder()
-            .min_buffer_size(0)
-            .max_buffers_per_shard(2)
-            .build();
+        let pool = BufferPool::builder().min_buffer_size(0).max_buffers_per_shard(2).build();
 
         let tls_cache_size = pool.config.tls_cache_size;
         let num_shards = pool.config.num_shards;
@@ -295,10 +292,7 @@ mod tests {
 
     #[test]
     fn test_clone_shares_state() {
-        let pool = BufferPool::builder()
-            .min_buffer_size(0)
-            .tls_cache_size(2)
-            .build();
+        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
 
         // Get buffers in main thread to fill TLS cache
         let buf1 = pool.get(1024);
@@ -323,10 +317,7 @@ mod tests {
 
     #[test]
     fn test_preallocate() {
-        let pool = BufferPool::builder()
-            .min_buffer_size(512 * 1024)
-            .num_shards(4)
-            .build();
+        let pool = BufferPool::builder().min_buffer_size(512 * 1024).num_shards(4).build();
 
         let initial_len = pool.len();
 
@@ -345,10 +336,7 @@ mod tests {
     fn test_edge_cases() {
         use std::thread;
 
-        let pool = BufferPool::builder()
-            .tls_cache_size(2)
-            .min_buffer_size(0)
-            .build();
+        let pool = BufferPool::builder().tls_cache_size(2).min_buffer_size(0).build();
 
         // Test is_empty on new pool
         assert!(pool.is_empty());
@@ -383,11 +371,7 @@ mod tests {
     fn test_shard_distribution() {
         use std::thread;
 
-        let pool = BufferPool::builder()
-            .num_shards(4)
-            .min_buffer_size(0)
-            .tls_cache_size(2)
-            .build();
+        let pool = BufferPool::builder().num_shards(4).min_buffer_size(0).tls_cache_size(2).build();
 
         // Spawn multiple threads to test distribution across shards
         // Each thread has affinity to one shard, so multiple threads
@@ -465,10 +449,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let pool = BufferPool::builder()
-            .min_buffer_size(0)
-            .tls_cache_size(2)
-            .build();
+        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
 
         // Fill pool with buffers
         let mut buffers = vec![];
@@ -495,10 +476,7 @@ mod tests {
 
     #[test]
     fn test_buffer_zeroing() {
-        let pool = BufferPool::builder()
-            .min_buffer_size(0)
-            .tls_cache_size(1)
-            .build();
+        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(1).build();
 
         // Get a buffer and fill it with non-zero data
         {
@@ -515,8 +493,10 @@ mod tests {
         let buf2 = pool.get(1024);
 
         // Check that buffer is completely zeroed
-        assert!(buf2.iter().all(|&b| b == 0),
+        assert!(
+            buf2.iter().all(|&b| b == 0),
             "Buffer was not properly zeroed! First 20 bytes: {:?}",
-            &buf2[..20]);
+            &buf2[..20]
+        );
     }
 }
