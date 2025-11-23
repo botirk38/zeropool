@@ -142,7 +142,7 @@ impl AsMut<[u8]> for PooledBuffer {
 }
 
 // tokio-uring trait implementations for zero-copy I/O
-#[cfg(feature = "tokio-uring")]
+#[cfg(all(target_os = "linux", feature = "tokio-uring"))]
 mod tokio_uring_support {
     use super::PooledBuffer;
     use tokio_uring::buf::{IoBuf, IoBufMut};
@@ -305,7 +305,7 @@ mod tests {
         // (This test verifies the Drop impl doesn't double-free)
     }
 
-    #[cfg(feature = "tokio-uring")]
+    #[cfg(all(target_os = "linux", feature = "tokio-uring"))]
     #[test]
     fn test_tokio_uring_traits() {
         use tokio_uring::buf::{IoBuf, IoBufMut};
@@ -321,7 +321,7 @@ mod tests {
         assert!(!ptr.is_null());
     }
 
-    #[cfg(feature = "tokio-uring")]
+    #[cfg(all(target_os = "linux", feature = "tokio-uring"))]
     #[test]
     fn test_tokio_uring_bounded_traits() {
         let pool = BufferPool::new();
