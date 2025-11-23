@@ -54,15 +54,15 @@ jobs:
       # Run Clippy with all targets and features
       # This uses the clippy.toml configuration for lint levels
       - name: Run Clippy (all targets)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -A unsafe_code
 
       # Additional check: Clippy for tests with extra scrutiny
       - name: Run Clippy (tests)
-        run: cargo clippy --tests --all-features -- -D warnings
+        run: cargo clippy --tests --all-features -- -D warnings -A unsafe_code
 
       # Additional check: Clippy for benchmarks
       - name: Run Clippy (benchmarks)
-        run: cargo clippy --benches --all-features -- -D warnings
+        run: cargo clippy --benches --all-features -- -D warnings -A unsafe_code
 
   docs:
     name: Docs

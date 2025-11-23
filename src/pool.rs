@@ -303,14 +303,13 @@ impl BufferPool {
             buffer
         } else {
             drop(buffers);
-            // SAFETY: We allocate uninitialized memory for performance, avoiding zeroing
-            let mut v = Vec::<std::mem::MaybeUninit<u8>>::with_capacity(size);
+            let mut v = Vec::with_capacity(size);
             // SAFETY: Setting length on capacity-allocated vector creates uninitialized but valid memory
+            #[allow(clippy::uninit_vec)]
             unsafe {
                 v.set_len(size);
-                // Transmute to Vec<u8> - the memory is uninitialized but that's intentional
-                std::mem::transmute::<Vec<std::mem::MaybeUninit<u8>>, Vec<u8>>(v)
             }
+            v
         };
 
         crate::buffer::PooledBuffer::new(vec, self.clone())

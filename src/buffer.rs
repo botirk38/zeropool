@@ -67,7 +67,7 @@ impl PooledBuffer {
         self.buffer.as_ref().unwrap().is_empty()
     }
 
-    /// Consumes the pooled buffer and returns the underlying Vec<u8>.
+    /// Consumes the pooled buffer and returns the underlying `Vec<u8>`.
     ///
     /// The buffer is NOT returned to the pool when using this method.
     /// Use this when you need to transfer ownership of the data.
