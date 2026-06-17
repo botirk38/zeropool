@@ -1,48 +1,45 @@
-//! RAII wrapper for pooled buffers with automatic return on drop.
+//! RAII buffer with automatic deallocation back to the pool.
 
 use std::fmt;
 use std::io;
 use std::ops::{Deref, DerefMut};
 
-use crate::BufferPool;
+use crate::ZeroPool;
 
-/// RAII wrapper for a pooled buffer that automatically returns to the pool on drop.
+/// An allocated byte buffer that deallocates back to the pool on drop.
 ///
 /// Provides transparent access to the underlying byte slice through `Deref`
-/// and `DerefMut`. Unlike the old API, the `Deref` target is `[u8]` (not
-/// `Vec<u8>`), preventing callers from accidentally resizing the buffer and
-/// violating pool invariants.
+/// and `DerefMut`. The `Deref` target is `[u8]` (not `Vec<u8>`), preventing
+/// callers from accidentally resizing the buffer and violating pool invariants.
 ///
-/// Use [`capacity()`](Self::capacity), [`len()`](Self::len), and
-/// [`is_empty()`](Self::is_empty) to query buffer metadata.
 /// Use [`into_inner()`](Self::into_inner) or [`into_vec()`](Self::into_vec)
 /// to extract the underlying `Vec<u8>` without returning it to the pool.
 ///
 /// # Example
 ///
 /// ```
-/// use zeropool::BufferPool;
+/// use zeropool::ZeroPool;
 ///
-/// let pool = BufferPool::new();
+/// let pool = ZeroPool::new();
 /// {
-///     let mut buffer = pool.get(1024);
-///     buffer[0] = 42;
-///     // Buffer automatically returned to pool here
+///     let mut buf = pool.alloc(1024);
+///     buf[0] = 42;
+///     // automatically deallocated back to pool here
 /// }
 /// ```
-pub struct PooledBuffer {
+pub struct Buf {
     buffer: Option<Vec<u8>>,
-    pool: BufferPool,
-    /// Pre-computed class index from get(), avoids recomputation in put().
+    pool: ZeroPool,
+    /// Pre-computed class index from alloc(), avoids recomputation in dealloc().
     /// `u8::MAX` means oversize (not pooled).
     class_idx: u8,
 }
 
 // ── Private infallible accessors ───────────────────────────────────────
 //
-// `buffer` is `Some` for the entire public lifetime of `PooledBuffer`.
+// `buffer` is `Some` for the entire public lifetime of `Buf`.
 // `into_inner()` consumes `self`; `Drop` is the only path to `None`.
-impl PooledBuffer {
+impl Buf {
     #[inline(always)]
     fn vec(&self) -> &Vec<u8> {
         // SAFETY: buffer is always Some during public lifetime.
@@ -56,9 +53,8 @@ impl PooledBuffer {
     }
 }
 
-impl PooledBuffer {
-    /// Create a new pooled buffer wrapper (internal).
-    pub(crate) fn new(buffer: Vec<u8>, pool: BufferPool, class_idx: u8) -> Self {
+impl Buf {
+    pub(crate) fn new(buffer: Vec<u8>, pool: ZeroPool, class_idx: u8) -> Self {
         Self { buffer: Some(buffer), pool, class_idx }
     }
 
@@ -92,22 +88,22 @@ impl PooledBuffer {
         self.vec_mut().as_mut_ptr()
     }
 
-    /// Consumes the pooled buffer and returns the underlying `Vec<u8>`.
+    /// Consumes the buffer and returns the underlying `Vec<u8>`.
     ///
     /// The buffer is **not** returned to the pool.
     ///
     /// # Example
     ///
     /// ```
-    /// use zeropool::BufferPool;
+    /// use zeropool::ZeroPool;
     ///
-    /// let pool = BufferPool::new();
-    /// let buffer = pool.get(1024);
-    /// let vec: Vec<u8> = buffer.into_inner();
+    /// let pool = ZeroPool::new();
+    /// let buf = pool.alloc(1024);
+    /// let vec: Vec<u8> = buf.into_inner();
     /// ```
     #[must_use]
     pub fn into_inner(mut self) -> Vec<u8> {
-        self.buffer.take().expect("PooledBuffer already consumed")
+        self.buffer.take().expect("Buf already consumed")
     }
 
     /// Alias for [`into_inner()`](Self::into_inner).
@@ -119,11 +115,8 @@ impl PooledBuffer {
 }
 
 // ── Deref to [u8], not Vec<u8> ─────────────────────────────────────────
-//
-// Exposing `[u8]` prevents callers from calling Vec methods like `push`,
-// `resize`, or `truncate` that would violate pool sizing invariants.
 
-impl Deref for PooledBuffer {
+impl Deref for Buf {
     type Target = [u8];
 
     #[inline]
@@ -132,52 +125,52 @@ impl Deref for PooledBuffer {
     }
 }
 
-impl DerefMut for PooledBuffer {
+impl DerefMut for Buf {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
         self.vec_mut()
     }
 }
 
-impl Drop for PooledBuffer {
+impl Drop for Buf {
     #[inline(always)]
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
-            self.pool.put(buffer, self.class_idx);
+            self.pool.dealloc(buffer, self.class_idx);
         }
     }
 }
 
-impl fmt::Debug for PooledBuffer {
+impl fmt::Debug for Buf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PooledBuffer")
+        f.debug_struct("Buf")
             .field("len", &self.len())
             .field("capacity", &self.capacity())
             .finish()
     }
 }
 
-impl AsRef<[u8]> for PooledBuffer {
+impl AsRef<[u8]> for Buf {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.vec()
     }
 }
 
-impl AsMut<[u8]> for PooledBuffer {
+impl AsMut<[u8]> for Buf {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.vec_mut()
     }
 }
 
-impl From<PooledBuffer> for Vec<u8> {
-    fn from(buf: PooledBuffer) -> Self {
+impl From<Buf> for Vec<u8> {
+    fn from(buf: Buf) -> Self {
         buf.into_inner()
     }
 }
 
-impl io::Write for PooledBuffer {
+impl io::Write for Buf {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         io::Write::write(self.vec_mut(), buf)
@@ -198,13 +191,13 @@ impl io::Write for PooledBuffer {
 
 #[cfg(all(target_os = "linux", feature = "tokio-uring"))]
 mod tokio_uring_support {
-    use super::PooledBuffer;
+    use super::Buf;
     use tokio_uring::buf::{IoBuf, IoBufMut};
 
-    // SAFETY: PooledBuffer wraps a Vec<u8> whose backing storage is stable
+    // SAFETY: Buf wraps a Vec<u8> whose backing storage is stable
     // for the entire lifetime of the struct. The Option is always Some
     // during public use; only Drop and into_inner set it to None.
-    unsafe impl IoBuf for PooledBuffer {
+    unsafe impl IoBuf for Buf {
         fn stable_ptr(&self) -> *const u8 {
             self.vec().as_ptr()
         }
@@ -220,7 +213,7 @@ mod tokio_uring_support {
 
     // SAFETY: Same stability guarantee as IoBuf. set_init is only called
     // by tokio-uring after it has written exactly `pos` bytes.
-    unsafe impl IoBufMut for PooledBuffer {
+    unsafe impl IoBufMut for Buf {
         fn stable_mut_ptr(&mut self) -> *mut u8 {
             self.vec_mut().as_mut_ptr()
         }
@@ -236,114 +229,114 @@ mod tokio_uring_support {
 
 #[cfg(test)]
 mod tests {
-    use crate::BufferPool;
+    use crate::ZeroPool;
 
     #[test]
-    fn test_pooled_buffer_deref() {
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(1024);
+    fn test_buf_deref() {
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(1024);
 
-        assert_eq!(buffer.len(), 1024);
-        buffer[0] = 42;
-        assert_eq!(buffer[0], 42);
+        assert_eq!(buf.len(), 1024);
+        buf[0] = 42;
+        assert_eq!(buf[0], 42);
     }
 
     #[test]
-    fn test_pooled_buffer_auto_return() {
-        let pool = BufferPool::new().min_buffer_size(0);
+    fn test_buf_auto_return() {
+        let pool = ZeroPool::new().min_buffer_size(0);
         let cap = {
-            let buffer = pool.get(4096);
-            buffer.capacity()
+            let buf = pool.alloc(4096);
+            buf.capacity()
         };
-        let buffer2 = pool.get(4096);
-        assert_eq!(buffer2.capacity(), cap, "Buffer was not reused");
+        let buf2 = pool.alloc(4096);
+        assert_eq!(buf2.capacity(), cap, "Buffer was not reused");
     }
 
     #[test]
-    fn test_pooled_buffer_explicit_drop() {
-        let pool = BufferPool::new().min_buffer_size(0);
+    fn test_buf_explicit_drop() {
+        let pool = ZeroPool::new().min_buffer_size(0);
         let cap = {
-            let buffer = pool.get(4096);
-            let cap = buffer.capacity();
-            drop(buffer);
+            let buf = pool.alloc(4096);
+            let cap = buf.capacity();
+            drop(buf);
             cap
         };
-        let buffer2 = pool.get(4096);
-        assert_eq!(buffer2.capacity(), cap, "Buffer was not reused");
+        let buf2 = pool.alloc(4096);
+        assert_eq!(buf2.capacity(), cap, "Buffer was not reused");
     }
 
     #[test]
-    fn test_pooled_buffer_as_ref() {
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(10);
-        buffer[0] = 42;
-        let slice: &[u8] = buffer.as_ref();
+    fn test_buf_as_ref() {
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(10);
+        buf[0] = 42;
+        let slice: &[u8] = buf.as_ref();
         assert_eq!(slice[0], 42);
     }
 
     #[test]
-    fn test_pooled_buffer_as_mut() {
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(10);
-        let slice: &mut [u8] = buffer.as_mut();
+    fn test_buf_as_mut() {
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(10);
+        let slice: &mut [u8] = buf.as_mut();
         slice[0] = 42;
-        assert_eq!(buffer[0], 42);
+        assert_eq!(buf[0], 42);
     }
 
     #[test]
-    fn test_pooled_buffer_debug() {
-        let pool = BufferPool::new();
-        let buffer = pool.get(1024);
-        let debug_str = format!("{buffer:?}");
-        assert!(debug_str.contains("PooledBuffer"));
+    fn test_buf_debug() {
+        let pool = ZeroPool::new();
+        let buf = pool.alloc(1024);
+        let debug_str = format!("{buf:?}");
+        assert!(debug_str.contains("Buf"));
         assert!(debug_str.contains("len"));
         assert!(debug_str.contains("capacity"));
     }
 
     #[test]
     fn test_into_inner() {
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(10);
-        buffer[0] = 42;
-        let vec = buffer.into_inner();
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(10);
+        buf[0] = 42;
+        let vec = buf.into_inner();
         assert_eq!(vec.len(), 10);
         assert_eq!(vec[0], 42);
     }
 
     #[test]
     fn test_into_vec() {
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(5);
-        buffer[0] = 123;
-        let vec = buffer.into_vec();
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(5);
+        buf[0] = 123;
+        let vec = buf.into_vec();
         assert_eq!(vec.len(), 5);
         assert_eq!(vec[0], 123);
     }
 
     #[test]
-    fn test_into_inner_consumes_buffer() {
-        let pool = BufferPool::new();
-        let buffer = pool.get(1024);
-        let vec = buffer.into_inner();
+    fn test_into_inner_consumes() {
+        let pool = ZeroPool::new();
+        let buf = pool.alloc(1024);
+        let vec = buf.into_inner();
         assert_eq!(vec.len(), 1024);
     }
 
     #[test]
-    fn test_from_pooled_buffer_for_vec() {
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(10);
-        buffer[0] = 99;
-        let vec: Vec<u8> = buffer.into();
+    fn test_from_buf_for_vec() {
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(10);
+        buf[0] = 99;
+        let vec: Vec<u8> = buf.into();
         assert_eq!(vec[0], 99);
     }
 
     #[test]
     fn test_io_write() {
         use std::io::Write;
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(0);
-        buffer.write_all(b"hello").unwrap();
-        assert_eq!(&*buffer, b"hello");
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(0);
+        buf.write_all(b"hello").unwrap();
+        assert_eq!(&*buf, b"hello");
     }
 
     #[cfg(all(target_os = "linux", feature = "tokio-uring"))]
@@ -351,10 +344,10 @@ mod tests {
     fn test_tokio_uring_traits() {
         use tokio_uring::buf::{IoBuf, IoBufMut};
 
-        let pool = BufferPool::new();
-        let mut buffer = pool.get(1024);
-        assert_eq!(buffer.bytes_total(), buffer.capacity());
-        let ptr = buffer.stable_mut_ptr();
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc(1024);
+        assert_eq!(buf.bytes_total(), buf.capacity());
+        let ptr = buf.stable_mut_ptr();
         assert!(!ptr.is_null());
     }
 }

@@ -3,10 +3,10 @@ name = "zeropool"
 version = "0.4.1"
 edition = "2024"
 authors = ["Botir Khaltaev"]
-description = "High-performance buffer pool with constant-time allocation, thread-safe operations, and 5x speedup over bytes crate"
+description = "A user-space byte allocator with size-class bucketing, lock-free shared pool, and thread-local caching"
 repository = "https://github.com/botirk38/zeropool"
 license = "MIT OR Apache-2.0"
-keywords = ["buffer", "pool", "io", "performance", "zero-copy"]
+keywords = ["allocator", "buffer", "pool", "performance", "lock-free"]
 categories = ["memory-management", "data-structures"]
 readme = "README.md"
 

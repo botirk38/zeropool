@@ -1,28 +1,27 @@
-//! Pool performance metrics with zero-cost atomic counters.
+//! Allocator performance metrics with zero-cost atomic counters.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::size_class::NUM_CLASSES;
 
-/// Atomic counters tracking pool performance.
+/// Atomic counters tracking allocator performance.
 ///
 /// All counters use `Relaxed` ordering — they are statistical and do not
-/// synchronize other operations. Reading metrics has zero impact on the
-/// hot path.
+/// synchronize other operations.
 #[derive(Debug)]
 pub(crate) struct Counters {
-    /// Total `get()` calls.
+    /// Total `alloc()` calls.
     pub gets: AtomicU64,
-    /// `get()` calls satisfied from the TLS cache (fastest path).
+    /// Calls satisfied from the TLS cache (fastest path).
     pub tls_hits: AtomicU64,
-    /// `get()` calls satisfied from the shared pool via batch refill.
+    /// Calls satisfied from the shared pool via batch refill.
     pub shared_hits: AtomicU64,
-    /// `get()` calls that required a fresh allocation (cold path).
+    /// Calls that required a fresh allocation (cold path).
     pub allocations: AtomicU64,
-    /// Total `put()` calls (buffers returned to the pool).
+    /// Total buffers deallocated back to the pool.
     pub puts: AtomicU64,
-    /// Buffers discarded on return (below min_buffer_size or oversize).
+    /// Buffers discarded on dealloc (below min_buffer_size or oversize).
     pub discards: AtomicU64,
     /// Oversize allocations that bypassed all classes.
     pub oversize: AtomicU64,
@@ -53,20 +52,20 @@ impl Counters {
     }
 }
 
-/// Point-in-time snapshot of pool statistics.
+/// Point-in-time snapshot of allocator statistics.
 ///
-/// Returned by [`BufferPool::stats()`](crate::BufferPool::stats).
+/// Returned by [`ZeroPool::stats()`](crate::ZeroPool::stats).
 /// All values are approximate — counters use `Relaxed` ordering and
 /// per-class counts may lag slightly under high concurrency.
 ///
 /// # Example
 ///
 /// ```
-/// use zeropool::BufferPool;
+/// use zeropool::ZeroPool;
 ///
-/// let pool = BufferPool::new().min_buffer_size(0);
+/// let pool = ZeroPool::new().min_buffer_size(0);
 ///
-/// let buf = pool.get(4096);
+/// let buf = pool.alloc(4096);
 /// drop(buf);
 ///
 /// let s = pool.stats();
@@ -75,9 +74,9 @@ impl Counters {
 /// assert!(s.hit_rate >= 0.0);
 /// ```
 #[derive(Debug, Clone)]
-pub struct PoolStats {
+pub struct Stats {
     // ── Aggregate counters ──────────────────────────────────────────
-    /// Total `get()` calls.
+    /// Total `alloc()` calls.
     pub gets: u64,
     /// Calls satisfied from the thread-local cache (fastest path).
     pub tls_hits: u64,
@@ -85,9 +84,9 @@ pub struct PoolStats {
     pub shared_hits: u64,
     /// Calls that required a fresh heap allocation (cold path).
     pub allocations: u64,
-    /// Total buffers returned to the pool.
+    /// Total buffers deallocated back to the pool.
     pub puts: u64,
-    /// Buffers discarded on return (too small or oversize).
+    /// Buffers discarded on dealloc (too small or oversize).
     pub discards: u64,
     /// Oversize allocations that bypassed all size classes.
     pub oversize: u64,
@@ -103,7 +102,7 @@ pub struct PoolStats {
     pub classes: [ClassInfo; NUM_CLASSES],
 }
 
-/// Per-class snapshot within [`PoolStats`].
+/// Per-class snapshot within [`Stats`].
 #[derive(Debug, Clone, Copy)]
 pub struct ClassInfo {
     /// Size class boundary in bytes (e.g. 4096, 16384, …).
@@ -112,7 +111,7 @@ pub struct ClassInfo {
     pub buffered: usize,
 }
 
-impl fmt::Display for PoolStats {
+impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -150,8 +149,8 @@ fn format_size(bytes: usize) -> String {
     }
 }
 
-/// Build a `PoolStats` snapshot from live counters + class table.
-pub(crate) fn snapshot(counters: &Counters, classes: &[crate::size_class::SizeClass]) -> PoolStats {
+/// Build a `Stats` snapshot from live counters + class table.
+pub(crate) fn snapshot(counters: &Counters, classes: &[crate::size_class::SizeClass]) -> Stats {
     let gets = counters.gets.load(Ordering::Relaxed);
     let tls_hits = counters.tls_hits.load(Ordering::Relaxed);
     let shared_hits = counters.shared_hits.load(Ordering::Relaxed);
@@ -176,7 +175,7 @@ pub(crate) fn snapshot(counters: &Counters, classes: &[crate::size_class::SizeCl
         };
     }
 
-    PoolStats {
+    Stats {
         gets,
         tls_hits,
         shared_hits,
