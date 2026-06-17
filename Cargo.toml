@@ -60,6 +60,7 @@ inline_always = "allow"            # Used deliberately for hot paths
 cast_possible_truncation = "allow" # Intentional in shard indexing
 cast_precision_loss = "allow"      # Acceptable for metrics/stats
 cast_sign_loss = "allow"           # Safe in context
+uninit_vec = "allow"               # set_len on u8 vecs — all bit patterns valid
 
 # Code organization
 module_name_repetitions = "allow" # pool::Pool is idiomatic
