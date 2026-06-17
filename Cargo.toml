@@ -99,6 +99,7 @@ object-pool = "0.6"
 
 [features]
 default = []
+global-alloc = []
 tokio-uring = ["dep:tokio-uring"]
 
 [[bench]]

@@ -51,6 +51,20 @@
 //! let pool = ZeroPool::new().allocator(PrefaultAllocator);
 //! ```
 //!
+//! # Global Allocator (feature: `global-alloc`)
+//!
+//! ```ignore
+//! use zeropool::ZeroPoolGlobalAlloc;
+//!
+//! #[global_allocator]
+//! static ALLOC: ZeroPoolGlobalAlloc = ZeroPoolGlobalAlloc::new();
+//! ```
+//!
+//! Replaces the process-wide allocator with ZeroPool-style size-class
+//! caching. Freed blocks are held in lock-free Treiber stacks per class
+//! and reused on subsequent allocations. Enable with
+//! `features = ["global-alloc"]`.
+//!
 //! # Ownership
 //!
 //! When a [`Buf`] is dropped, it deallocates back to the pool.
@@ -74,6 +88,8 @@
 mod allocator;
 mod buf;
 mod config;
+#[cfg(feature = "global-alloc")]
+mod global;
 mod pool;
 mod size_class;
 mod stats;
@@ -81,6 +97,8 @@ mod tls;
 
 pub use allocator::{Allocator, HeapAllocator};
 pub use buf::Buf;
+#[cfg(feature = "global-alloc")]
+pub use global::ZeroPoolGlobalAlloc;
 pub use pool::ZeroPool;
 pub use stats::{ClassInfo, Stats};
 

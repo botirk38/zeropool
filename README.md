@@ -57,6 +57,19 @@ impl Allocator for PrefaultAllocator {
 let pool = ZeroPool::new().allocator(PrefaultAllocator);
 ```
 
+## Global Allocator
+
+Replace the process-wide allocator with ZeroPool-style size-class caching. Enable with `features = ["global-alloc"]`:
+
+```rust
+use zeropool::ZeroPoolGlobalAlloc;
+
+#[global_allocator]
+static ALLOC: ZeroPoolGlobalAlloc = ZeroPoolGlobalAlloc::new();
+```
+
+Freed blocks are held in lock-free Treiber stacks per size class and reused on subsequent allocations. Falls through to `std::alloc::System` for cache misses and oversize requests.
+
 ## Statistics
 
 ```rust
