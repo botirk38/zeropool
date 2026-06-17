@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::config::PoolConfig;
 use crate::size_class::{CLASS_SIZES, SizeClass, class_for_capacity, class_for_size};
-use crate::tls::TLS;
+use crate::tls::with_tls;
 use crate::utils::pin_buffer;
 
 /// Shared state behind a single `Arc`, avoiding per-clone copies of config.
@@ -128,17 +128,11 @@ impl BufferPool {
         let class = &self.inner.classes[class_idx];
 
         // ── TLS fast path (lock-free) ──────────────────────────────
-        let tls_result = TLS.with(|tls| {
-            let mut state = tls.borrow_mut();
-
-            // Initialize TLS for this pool on first access
-            if state.pool_id == 0 {
-                state.init_for(self.inner.id, self.inner.config.tls_cache_size);
-            }
-
-            // Skip TLS if it belongs to a different pool
+        let tls_result = with_tls(|state| {
+            // (Re-)initialize TLS when uninitialized or switching pools.
+            // init_for flushes stale caches when the pool ID changes.
             if !state.belongs_to(self.inner.id) {
-                return None;
+                state.init_for(self.inner.id, self.inner.config.tls_cache_size);
             }
 
             // LIFO pop from per-class cache
@@ -188,23 +182,19 @@ impl BufferPool {
             return; // smaller than smallest class — drop
         };
 
-        // Pin if configured
+        // Pin if configured (fill_for_pinning sets len=capacity so
+        // pin_buffer sees the full allocation; clear() restores len=0).
         if self.inner.config.pinned_memory {
+            SizeClass::fill_for_pinning(&mut buffer);
             pin_buffer(&buffer);
+            buffer.clear();
         }
 
         // ── TLS fast path ──────────────────────────────────────────
-        let overflow = TLS.with(|tls| {
-            let mut state = tls.borrow_mut();
-
-            // Initialize TLS for this pool on first access
-            if state.pool_id == 0 {
-                state.init_for(self.inner.id, self.inner.config.tls_cache_size);
-            }
-
-            // Wrong pool — go straight to shared
+        let overflow = with_tls(|state| {
+            // (Re-)initialize TLS when uninitialized or switching pools.
             if !state.belongs_to(self.inner.id) {
-                return Some(buffer);
+                state.init_for(self.inner.id, self.inner.config.tls_cache_size);
             }
 
             let class = &self.inner.classes[class_idx];

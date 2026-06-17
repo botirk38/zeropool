@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 
 use crate::size_class::{NUM_CLASSES, SizeClass};
 
@@ -89,5 +89,27 @@ impl TlsState {
 
 thread_local! {
     /// Single consolidated TLS slot for the buffer pool.
-    pub(crate) static TLS: RefCell<TlsState> = const { RefCell::new(TlsState::new()) };
+    ///
+    /// Uses `UnsafeCell` instead of `RefCell` to eliminate runtime borrow
+    /// checking overhead (~5ns per access). This is safe because TLS is
+    /// inherently single-threaded — only one `&mut` can exist at a time.
+    pub(crate) static TLS: UnsafeCell<TlsState> = const { UnsafeCell::new(TlsState::new()) };
+}
+
+/// Access the TLS state mutably within the current thread.
+///
+/// # Safety
+///
+/// This is safe because:
+/// 1. `thread_local!` ensures only the owning thread can access the cell.
+/// 2. The closure `f` has exclusive access — we never create overlapping
+///    `&mut` references since `with_tls` is not reentrant in our call sites.
+#[inline(always)]
+pub(crate) fn with_tls<R>(f: impl FnOnce(&mut TlsState) -> R) -> R {
+    TLS.with(|cell| {
+        // SAFETY: TLS is single-threaded. Our call sites (pool.get/put) never
+        // re-enter with_tls while a previous borrow is alive.
+        let state = unsafe { &mut *cell.get() };
+        f(state)
+    })
 }
