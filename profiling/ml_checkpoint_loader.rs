@@ -34,9 +34,8 @@ fn main() {
 
     // Create pool with configuration optimized for large buffers
     let pool = BufferPool::builder()
-        .num_shards(8)
         .tls_cache_size(4)
-        .max_buffers_per_shard(32)
+        .max_buffers_per_class(32)
         .min_buffer_size(1024 * 1024) // 1MB minimum
         .build();
 

@@ -81,7 +81,7 @@ doc_markdown = "allow"       # Allow flexibility in doc formatting
 option_if_let_else = "allow" # Sometimes more readable
 
 [dependencies]
-parking_lot = "0.12.5"
+crossbeam-queue = "0.3"
 region = "3.0"
 
 # Optional tokio-uring support

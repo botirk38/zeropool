@@ -79,19 +79,14 @@ fn benchmark_memory_pressure(c: &mut Criterion) {
             BenchmarkId::new("zeropool", max_buffers),
             &max_buffers,
             |b, &max_buffers| {
-                let pool = zeropool::BufferPool::builder()
-                    .max_buffers_per_shard(max_buffers)
-                    .num_shards(1) // Single shard for predictable behavior
-                    .build();
+                let pool =
+                    zeropool::BufferPool::builder().max_buffers_per_class(max_buffers).build();
 
                 b.iter(|| {
-                    // Create pressure by allocating more than max_buffers
                     let mut bufs = vec![];
                     for _ in 0..(max_buffers * 2) {
                         bufs.push(pool.get(64 * 1024));
                     }
-
-                    // Return all - pool should manage the overflow
                     for buf in bufs {
                         drop(buf);
                     }
@@ -103,22 +98,28 @@ fn benchmark_memory_pressure(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark shard scaling
-fn benchmark_shard_scaling(c: &mut Criterion) {
-    let mut group = c.benchmark_group("memory_features/shard_scaling");
+/// Benchmark size-class scaling
+fn benchmark_size_class_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("memory_features/size_class_scaling");
 
-    for num_shards in [1, 4, 8, 16] {
+    for num_classes in [1, 3, 5, 8] {
         group.bench_with_input(
-            BenchmarkId::new("zeropool", num_shards),
-            &num_shards,
-            |b, &num_shards| {
-                let pool = zeropool::BufferPool::builder().num_shards(num_shards).build();
+            BenchmarkId::new("zeropool", num_classes),
+            &num_classes,
+            |b, &num_classes| {
+                let pool = zeropool::BufferPool::new();
+                // Use different number of size classes simultaneously
+                let sizes: Vec<usize> =
+                    [4096, 16384, 65536, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864]
+                        .iter()
+                        .take(num_classes)
+                        .copied()
+                        .collect();
 
                 b.iter(|| {
-                    // Simulate concurrent access pattern
                     let mut bufs = vec![];
-                    for _ in 0..20 {
-                        bufs.push(pool.get(64 * 1024));
+                    for &size in &sizes {
+                        bufs.push(pool.get(size));
                     }
                     for buf in bufs {
                         black_box(&buf);
@@ -144,7 +145,6 @@ fn benchmark_min_buffer_size_filtering(c: &mut Criterion) {
                 let pool = zeropool::BufferPool::builder().min_buffer_size(min_size).build();
 
                 b.iter(|| {
-                    // Mix of small and large buffers
                     let small_buf = pool.get(512);
                     let large_buf = pool.get(128 * 1024);
 
@@ -166,7 +166,7 @@ criterion_group!(
     benchmark_pinned_memory,
     benchmark_preallocation_effectiveness,
     benchmark_memory_pressure,
-    benchmark_shard_scaling,
+    benchmark_size_class_scaling,
     benchmark_min_buffer_size_filtering
 );
 criterion_main!(benches);

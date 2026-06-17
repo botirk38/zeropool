@@ -1,29 +1,22 @@
-/// Buffer eviction policy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EvictionPolicy {
-    /// Simple LIFO (current behavior, lowest overhead)
-    Lifo,
-    /// CLOCK-Pro with access counter (better cache locality)
-    #[default]
-    ClockPro,
-}
-
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-/// Default minimum buffer size (1MB) - optimized for ML/tensor workloads
-/// Use PoolConfig presets for other workload types
-const DEFAULT_MIN_BUFFER_SIZE: usize = 1024 * 1024;
+/// Global counter for unique pool instance IDs.
+/// Prevents TLS cache cross-contamination between pool instances.
+static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Calculate optimal TLS cache size based on system CPU count
+/// Allocate a new unique pool ID.
+pub(crate) fn next_pool_id() -> u64 {
+    NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Default minimum buffer size (4KB) — smallest poolable size class.
+const DEFAULT_MIN_BUFFER_SIZE: usize = 4 * 1024;
+
+/// Calculate optimal TLS cache size per size class based on CPU count.
 ///
-/// Lower core counts indicate fewer concurrent threads, so smaller cache is sufficient.
-/// Higher core counts indicate more parallelism and benefit from larger TLS cache.
-///
-/// # Formula
-/// - 1-2 cores (embedded): 2 buffers
-/// - 3-4 cores (desktop): 4 buffers
-/// - 5-8 cores (workstation): 6 buffers
-/// - 9+ cores (server): 8 buffers
+/// Lower core counts → fewer concurrent threads → smaller cache.
+/// Higher core counts → more parallelism → larger TLS cache.
 const fn calculate_default_tls_cache_size(num_cpus: usize) -> usize {
     match num_cpus {
         0..=2 => 2,
@@ -33,164 +26,105 @@ const fn calculate_default_tls_cache_size(num_cpus: usize) -> usize {
     }
 }
 
-/// Calculate optimal shard count based on system CPU count
+/// Calculate max buffers per size class based on system parallelism.
 ///
-/// Strategy: Use ~1 shard per 2 cores (rounded to power-of-2) to balance
-/// lock contention vs cache locality.
-///
-/// # Formula
-/// - Target = max(num_cpus / 2, 4)
-/// - Round up to next power of 2
-/// - Clamp to [4, 128] range
-///
-/// # Examples
-/// - 4 cores → 4 shards
-/// - 8 cores → 8 shards
-/// - 16 cores → 8 shards
-/// - 32 cores → 16 shards
-/// - 64 cores → 32 shards
-/// - 128 cores → 64 shards
-fn calculate_num_shards(num_cpus: usize) -> usize {
-    let target = (num_cpus / 2).max(4);
-    next_power_of_2(target).clamp(4, 128)
-}
-
-/// Calculate optimal max buffers per shard based on system parallelism
-///
-/// More cores = more concurrent operations = more buffers needed.
-/// Scales conservatively to avoid excessive memory usage.
-///
-/// # Formula
-/// - Base: 16 buffers per shard
-/// - Scaling: multiply by (num_cpus / 8), clamped to [1, 4]
-/// - Result: 16-64 buffers per shard
-///
-/// # Examples
-/// - 4 cores → 16 buffers/shard
-/// - 8 cores → 16 buffers/shard
-/// - 16 cores → 32 buffers/shard
-/// - 32 cores → 64 buffers/shard
-/// - 64+ cores → 64 buffers/shard (max)
-const fn calculate_max_buffers_per_shard(num_cpus: usize) -> usize {
-    const BASE: usize = 16;
+/// More cores → more concurrent operations → more buffers needed.
+const fn calculate_max_buffers_per_class(num_cpus: usize) -> usize {
+    const BASE: usize = 32;
     let scaling = match num_cpus {
         0..16 => 1,
-        16..24 => 2,
-        24..32 => 3,
+        16..32 => 2,
+        32..64 => 3,
         _ => 4,
     };
     BASE * scaling
 }
 
-/// Round up to next power of 2
-#[inline]
-const fn next_power_of_2(n: usize) -> usize {
-    if n == 0 {
-        return 1;
-    }
-    let mut power = 1;
-    while power < n {
-        power <<= 1;
-    }
-    power
+/// Calculate default batch transfer size based on TLS cache size.
+///
+/// Batch size is half the TLS cache: small enough to leave room,
+/// large enough to amortize shared-pool access.
+const fn calculate_batch_size(tls_cache_size: usize) -> usize {
+    let half = tls_cache_size / 2;
+    if half < 2 { 2 } else { half }
 }
 
-/// Builder for configuring a `BufferPool`
-///
-/// Follows the idiomatic Rust builder pattern. Use `BufferPool::builder()` to create.
+/// Builder for configuring a [`BufferPool`](crate::BufferPool).
 ///
 /// # Example
 /// ```
 /// use zeropool::BufferPool;
 ///
 /// let pool = BufferPool::builder()
-///     .min_buffer_size(512 * 1024)  // 512KB minimum
-///     .num_shards(16)
+///     .min_buffer_size(4096)
+///     .tls_cache_size(4)
 ///     .build();
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct Builder {
-    num_shards: Option<usize>,
     tls_cache_size: Option<usize>,
-    max_buffers_per_shard: Option<usize>,
+    max_buffers_per_class: Option<usize>,
     min_buffer_size: Option<usize>,
     pinned_memory: Option<bool>,
-    eviction_policy: Option<EvictionPolicy>,
+    batch_size: Option<usize>,
 }
 
 impl Builder {
-    /// Set the minimum buffer size to keep in the pool
+    /// Set the minimum buffer size to keep in the pool.
     ///
-    /// Buffers smaller than this will be discarded when returned to the pool.
-    /// Default: 1MB (optimized for large I/O operations)
+    /// Buffers smaller than this are discarded when returned.
+    /// Default: 4KB
     pub fn min_buffer_size(mut self, size: usize) -> Self {
         self.min_buffer_size = Some(size);
         self
     }
 
-    /// Set the number of shards in the global pool
+    /// Set the number of buffers kept in thread-local cache per size class.
     ///
-    /// More shards reduce lock contention in multi-threaded scenarios.
-    /// Will be rounded up to next power of 2 and clamped to [4, 128].
-    /// Default: Automatically calculated based on CPU count
-    pub fn num_shards(mut self, count: usize) -> Self {
-        self.num_shards = Some(count);
-        self
-    }
-
-    /// Set the number of buffers kept in thread-local cache per thread
-    ///
-    /// Higher values reduce shared pool access but increase per-thread memory usage.
-    /// Default: 2-8 based on CPU count
+    /// Higher values reduce shared pool access but increase per-thread memory.
+    /// Default: 2–8 based on CPU count
     pub fn tls_cache_size(mut self, size: usize) -> Self {
         self.tls_cache_size = Some(size);
         self
     }
 
-    /// Set the maximum number of buffers per shard
+    /// Set the maximum number of buffers per size class in the shared pool.
     ///
-    /// Total pool capacity = num_shards × max_buffers_per_shard
-    /// Default: 16-64 based on CPU count
-    pub fn max_buffers_per_shard(mut self, count: usize) -> Self {
-        self.max_buffers_per_shard = Some(count);
+    /// Controls how many buffers of each size the shared pool retains.
+    /// Default: 32–128 based on CPU count
+    pub fn max_buffers_per_class(mut self, count: usize) -> Self {
+        self.max_buffers_per_class = Some(count);
         self
     }
 
-    /// Enable pinned memory (mlock) for pooled buffers
+    /// Enable pinned memory (mlock) for pooled buffers.
     ///
-    /// When enabled, buffers are locked in RAM and won't be swapped to disk.
-    /// This is useful for security-sensitive or latency-critical applications.
-    ///
-    /// Requires sufficient permissions (CAP_IPC_LOCK on Linux or similar).
-    /// Falls back gracefully if pinning fails.
+    /// Locks buffers in RAM to prevent swapping. Useful for latency-critical
+    /// or security-sensitive applications. Falls back gracefully if pinning fails.
     /// Default: false
     pub fn pinned_memory(mut self, enabled: bool) -> Self {
         self.pinned_memory = Some(enabled);
         self
     }
 
-    /// Set buffer eviction policy
+    /// Set the batch size for TLS ↔ shared pool transfers.
     ///
-    /// # Examples
-    /// ```
-    /// use zeropool::{BufferPool, EvictionPolicy};
-    ///
-    /// let pool = BufferPool::builder()
-    ///     .eviction_policy(EvictionPolicy::Lifo)  // Use simple LIFO
-    ///     .build();
-    /// ```
-    pub fn eviction_policy(mut self, policy: EvictionPolicy) -> Self {
-        self.eviction_policy = Some(policy);
+    /// When a thread-local cache misses, this many buffers are moved at once
+    /// from the shared pool (magazine-style). Larger values amortize access
+    /// cost but increase per-transfer latency.
+    /// Default: half of TLS cache size (min 2)
+    pub fn batch_size(mut self, size: usize) -> Self {
+        self.batch_size = Some(size);
         self
     }
 
-    /// Build the `BufferPool` with the configured settings
+    /// Build the [`BufferPool`](crate::BufferPool) with the configured settings.
     ///
-    /// Any settings not explicitly set will use sensible system-aware defaults.
+    /// Any settings not explicitly set use system-aware defaults.
     ///
     /// # Panics
     ///
-    /// Panics if `tls_cache_size` is set to 0 or `max_buffers_per_shard` is set to 0.
+    /// Panics if `tls_cache_size` is 0 or `max_buffers_per_class` is 0.
     pub fn build(self) -> crate::BufferPool {
         let num_cpus = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
 
@@ -198,77 +132,41 @@ impl Builder {
             .tls_cache_size
             .unwrap_or_else(|| calculate_default_tls_cache_size(num_cpus));
 
-        let max_buffers_per_shard = self
-            .max_buffers_per_shard
-            .unwrap_or_else(|| calculate_max_buffers_per_shard(num_cpus));
+        let max_buffers_per_class = self
+            .max_buffers_per_class
+            .unwrap_or_else(|| calculate_max_buffers_per_class(num_cpus));
 
-        // Validate configuration
-        assert!(tls_cache_size > 0, "tls_cache_size must be greater than 0");
-        assert!(max_buffers_per_shard > 0, "max_buffers_per_shard must be greater than 0");
+        assert!(tls_cache_size > 0, "tls_cache_size must be > 0");
+        assert!(max_buffers_per_class > 0, "max_buffers_per_class must be > 0");
+
+        let batch_size = self.batch_size.unwrap_or_else(|| calculate_batch_size(tls_cache_size));
 
         let config = PoolConfig {
-            num_shards: self.num_shards.map_or_else(
-                || calculate_num_shards(num_cpus),
-                |n| {
-                    let normalized = next_power_of_2(n).clamp(4, 128);
-                    // Verify it's a power of 2 after clamping
-                    debug_assert!(normalized.is_power_of_two(), "num_shards must be power of 2");
-                    normalized
-                },
-            ),
+            id: next_pool_id(),
             tls_cache_size,
-            max_buffers_per_shard,
+            max_buffers_per_class,
             min_buffer_size: self.min_buffer_size.unwrap_or(DEFAULT_MIN_BUFFER_SIZE),
             pinned_memory: self.pinned_memory.unwrap_or(false),
-            eviction_policy: self.eviction_policy.unwrap_or_default(),
+            batch_size,
         };
 
         crate::BufferPool::with_config(config)
     }
 }
 
-/// Internal configuration for buffer pool (not part of public API)
+/// Internal pool configuration.
 #[derive(Debug, Clone)]
 pub(crate) struct PoolConfig {
-    pub num_shards: usize,
+    /// Unique pool instance ID for TLS isolation.
+    pub id: u64,
+    /// Max buffers per size class in each thread-local cache.
     pub tls_cache_size: usize,
-    pub max_buffers_per_shard: usize,
+    /// Max buffers per size class in the shared pool.
+    pub max_buffers_per_class: usize,
+    /// Minimum buffer capacity to keep in the pool.
     pub min_buffer_size: usize,
+    /// Whether to pin buffer memory with mlock.
     pub pinned_memory: bool,
-    pub eviction_policy: EvictionPolicy,
-}
-
-impl Default for PoolConfig {
-    /// Create pool configuration with system-aware defaults
-    ///
-    /// Automatically adapts to your system by detecting CPU count and
-    /// calculating optimal parameters for:
-    /// - Number of shards (reduces lock contention)
-    /// - TLS cache size (improves single-threaded performance)
-    /// - Buffers per shard (scales with parallelism)
-    ///
-    /// # Adaptive Behavior
-    ///
-    /// - **TLS cache**: 2-8 buffers based on CPU count
-    /// - **Shards**: ~1 shard per 2 cores (power-of-2, range [4, 128])
-    /// - **Buffers/shard**: 16-64 based on parallelism level
-    /// - **Min buffer size**: 1MB (optimized for tensor workloads)
-    ///
-    /// For workload-specific optimizations, use preset methods:
-    /// - `PoolConfig::for_ml_workload()`
-    /// - `PoolConfig::for_network_io()`
-    /// - `PoolConfig::for_file_io()`
-    /// - `PoolConfig::balanced()`
-    fn default() -> Self {
-        let num_cpus = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
-
-        Self {
-            num_shards: calculate_num_shards(num_cpus),
-            tls_cache_size: calculate_default_tls_cache_size(num_cpus),
-            max_buffers_per_shard: calculate_max_buffers_per_shard(num_cpus),
-            min_buffer_size: DEFAULT_MIN_BUFFER_SIZE,
-            pinned_memory: false,
-            eviction_policy: EvictionPolicy::default(),
-        }
-    }
+    /// Batch size for TLS ↔ shared pool transfers.
+    pub batch_size: usize,
 }

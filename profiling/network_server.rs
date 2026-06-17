@@ -48,9 +48,8 @@ fn main() {
     // Create pool optimized for high concurrency
     let pool = Arc::new(
         BufferPool::builder()
-            .num_shards(16)
             .tls_cache_size(6)
-            .max_buffers_per_shard(32)
+            .max_buffers_per_class(32)
             .min_buffer_size(512) // Keep even small packets
             .build(),
     );

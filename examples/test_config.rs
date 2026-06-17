@@ -10,10 +10,10 @@ fn main() {
 
     // Custom configuration with builder
     let custom_pool = BufferPool::builder()
-        .num_shards(16)
         .tls_cache_size(8)
-        .max_buffers_per_shard(32)
-        .min_buffer_size(512 * 1024)
+        .max_buffers_per_class(32)
+        .min_buffer_size(4096)
+        .batch_size(4)
         .build();
 
     println!("\nCreated custom pool with builder");

@@ -66,9 +66,8 @@ fn main() {
     // Create pool with aggressive settings for stress testing
     let pool = Arc::new(
         BufferPool::builder()
-            .num_shards(16)
             .tls_cache_size(8)
-            .max_buffers_per_shard(64)
+            .max_buffers_per_class(64)
             .min_buffer_size(64)
             .build(),
     );
@@ -179,13 +178,13 @@ fn mixed_sizes(pool: &BufferPool, thread_id: usize) {
     }
 }
 
-/// Eviction pressure: Exceed max_buffers_per_shard to trigger evictions
+/// Eviction pressure: Exceed max_buffers_per_class to trigger evictions
 fn eviction_pressure(pool: &BufferPool, _thread_id: usize) {
     // Create massive pressure by allocating many large buffers
     for round in 0..20 {
         let mut buffers = Vec::new();
 
-        // Allocate way more than max_buffers_per_shard
+        // Allocate way more than max_buffers_per_class
         for i in 0..100 {
             let size = LARGE_SIZES[i % LARGE_SIZES.len()];
             buffers.push(pool.get(size));

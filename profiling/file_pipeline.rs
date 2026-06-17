@@ -58,9 +58,8 @@ fn main() {
 
     // Create pool optimized for file I/O
     let pool = BufferPool::builder()
-        .num_shards(8)
         .tls_cache_size(4)
-        .max_buffers_per_shard(24)
+        .max_buffers_per_class(24)
         .min_buffer_size(4 * 1024)
         .build();
 
