@@ -1,23 +1,13 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-/// Global counter for unique pool instance IDs.
-/// Prevents TLS cache cross-contamination between pool instances.
-static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Allocate a new unique pool ID.
-pub(crate) fn next_pool_id() -> u64 {
-    NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed)
-}
+use crate::pool::{BufferPool, Shared};
+use crate::size_class::ClassTable;
 
 /// Default minimum buffer size (4KB) — smallest poolable size class.
 const DEFAULT_MIN_BUFFER_SIZE: usize = 4 * 1024;
 
 /// Calculate optimal TLS cache size per size class based on CPU count.
-///
-/// Lower core counts → fewer concurrent threads → smaller cache.
-/// Higher core counts → more parallelism → larger TLS cache.
-const fn calculate_default_tls_cache_size(num_cpus: usize) -> usize {
+const fn default_tls_cache_size(num_cpus: usize) -> usize {
     match num_cpus {
         0..=2 => 2,
         3..=4 => 4,
@@ -27,9 +17,7 @@ const fn calculate_default_tls_cache_size(num_cpus: usize) -> usize {
 }
 
 /// Calculate max buffers per size class based on system parallelism.
-///
-/// More cores → more concurrent operations → more buffers needed.
-const fn calculate_max_buffers_per_class(num_cpus: usize) -> usize {
+const fn default_max_buffers_per_class(num_cpus: usize) -> usize {
     const BASE: usize = 32;
     let scaling = match num_cpus {
         0..16 => 1,
@@ -41,15 +29,12 @@ const fn calculate_max_buffers_per_class(num_cpus: usize) -> usize {
 }
 
 /// Calculate default batch transfer size based on TLS cache size.
-///
-/// Batch size is half the TLS cache: small enough to leave room,
-/// large enough to amortize shared-pool access.
-const fn calculate_batch_size(tls_cache_size: usize) -> usize {
+const fn default_batch_size(tls_cache_size: usize) -> usize {
     let half = tls_cache_size / 2;
     if half < 2 { 2 } else { half }
 }
 
-/// Builder for configuring a [`BufferPool`](crate::BufferPool).
+/// Builder for configuring a [`BufferPool`].
 ///
 /// # Example
 /// ```
@@ -118,55 +103,35 @@ impl Builder {
         self
     }
 
-    /// Build the [`BufferPool`](crate::BufferPool) with the configured settings.
+    /// Build the [`BufferPool`] with the configured settings.
     ///
     /// Any settings not explicitly set use system-aware defaults.
     ///
     /// # Panics
     ///
     /// Panics if `tls_cache_size` is 0 or `max_buffers_per_class` is 0.
-    pub fn build(self) -> crate::BufferPool {
+    pub fn build(self) -> BufferPool {
         let num_cpus = thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
-        let tls_cache_size = self
-            .tls_cache_size
-            .unwrap_or_else(|| calculate_default_tls_cache_size(num_cpus));
+        let tls_cache_size =
+            self.tls_cache_size.unwrap_or_else(|| default_tls_cache_size(num_cpus));
 
         let max_buffers_per_class = self
             .max_buffers_per_class
-            .unwrap_or_else(|| calculate_max_buffers_per_class(num_cpus));
+            .unwrap_or_else(|| default_max_buffers_per_class(num_cpus));
 
         assert!(tls_cache_size > 0, "tls_cache_size must be > 0");
         assert!(max_buffers_per_class > 0, "max_buffers_per_class must be > 0");
 
-        let batch_size = self.batch_size.unwrap_or_else(|| calculate_batch_size(tls_cache_size));
+        let batch_size = self.batch_size.unwrap_or_else(|| default_batch_size(tls_cache_size));
 
-        let config = PoolConfig {
-            id: next_pool_id(),
+        BufferPool::from_shared(Shared {
+            id: BufferPool::next_id(),
+            table: ClassTable::new(max_buffers_per_class),
             tls_cache_size,
-            max_buffers_per_class,
             min_buffer_size: self.min_buffer_size.unwrap_or(DEFAULT_MIN_BUFFER_SIZE),
             pinned_memory: self.pinned_memory.unwrap_or(false),
             batch_size,
-        };
-
-        crate::BufferPool::with_config(config)
+        })
     }
-}
-
-/// Internal pool configuration.
-#[derive(Debug, Clone)]
-pub(crate) struct PoolConfig {
-    /// Unique pool instance ID for TLS isolation.
-    pub id: u64,
-    /// Max buffers per size class in each thread-local cache.
-    pub tls_cache_size: usize,
-    /// Max buffers per size class in the shared pool.
-    pub max_buffers_per_class: usize,
-    /// Minimum buffer capacity to keep in the pool.
-    pub min_buffer_size: usize,
-    /// Whether to pin buffer memory with mlock.
-    pub pinned_memory: bool,
-    /// Batch size for TLS ↔ shared pool transfers.
-    pub batch_size: usize,
 }

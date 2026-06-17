@@ -101,38 +101,6 @@ object-pool = "0.6"
 default = []
 tokio-uring = ["dep:tokio-uring"]
 
-[profile.profiling]
-inherits = "release"
-debug = true
-
 [[bench]]
-name = "pool_comparison"
+name = "pool"
 harness = false
-
-[[bench]]
-name = "allocation_patterns"
-harness = false
-
-[[bench]]
-name = "cache_behavior"
-harness = false
-
-[[bench]]
-name = "memory_features"
-harness = false
-
-[[bin]]
-name = "ml_checkpoint_loader"
-path = "profiling/ml_checkpoint_loader.rs"
-
-[[bin]]
-name = "network_server"
-path = "profiling/network_server.rs"
-
-[[bin]]
-name = "file_pipeline"
-path = "profiling/file_pipeline.rs"
-
-[[bin]]
-name = "stress_test"
-path = "profiling/stress_test.rs"

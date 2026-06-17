@@ -33,6 +33,9 @@ use crate::BufferPool;
 pub struct PooledBuffer {
     buffer: Option<Vec<u8>>,
     pool: BufferPool,
+    /// Pre-computed class index from get(), avoids recomputation in put().
+    /// `u8::MAX` means oversize (not pooled).
+    class_idx: u8,
 }
 
 // ── Private infallible accessors ───────────────────────────────────────
@@ -55,8 +58,8 @@ impl PooledBuffer {
 
 impl PooledBuffer {
     /// Create a new pooled buffer wrapper (internal).
-    pub(crate) fn new(buffer: Vec<u8>, pool: BufferPool) -> Self {
-        Self { buffer: Some(buffer), pool }
+    pub(crate) fn new(buffer: Vec<u8>, pool: BufferPool, class_idx: u8) -> Self {
+        Self { buffer: Some(buffer), pool, class_idx }
     }
 
     /// Returns the length of the buffer in bytes.
@@ -139,7 +142,7 @@ impl DerefMut for PooledBuffer {
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
-            self.pool.put(buffer);
+            self.pool.put(buffer, self.class_idx);
         }
     }
 }

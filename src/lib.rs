@@ -84,7 +84,6 @@ mod config;
 mod pool;
 mod size_class;
 mod tls;
-mod utils;
 
 pub use buffer::PooledBuffer;
 pub use config::Builder;
@@ -126,7 +125,7 @@ mod tests {
             .max_buffers_per_class(16)
             .build();
 
-        let tls_cache_size = pool.inner.config.tls_cache_size;
+        let tls_cache_size = pool.0.tls_cache_size;
         let pool_clone = pool.clone();
 
         // Small buffers below min_buffer_size should be discarded
@@ -184,7 +183,7 @@ mod tests {
     #[test]
     fn test_thread_local_cache() {
         let pool = BufferPool::builder().min_buffer_size(0).build();
-        let cache_size = pool.inner.config.tls_cache_size;
+        let cache_size = pool.0.tls_cache_size;
 
         // First N get/put operations should use TLS
         for _ in 0..cache_size {
@@ -214,10 +213,9 @@ mod tests {
             .batch_size(2)
             .build();
 
-        assert_eq!(pool2.inner.config.min_buffer_size, 4096);
-        assert_eq!(pool2.inner.config.tls_cache_size, 4);
-        assert_eq!(pool2.inner.config.max_buffers_per_class, 16);
-        assert_eq!(pool2.inner.config.batch_size, 2);
+        assert_eq!(pool2.0.min_buffer_size, 4096);
+        assert_eq!(pool2.0.tls_cache_size, 4);
+        assert_eq!(pool2.0.batch_size, 2);
 
         let buf = pool2.get(8192);
         assert_eq!(buf.len(), 8192);
@@ -266,8 +264,8 @@ mod tests {
         drop(buf4);
         drop(buf5);
 
-        // Clone and original share the same Arc<Inner>
-        assert!(std::sync::Arc::ptr_eq(&pool.inner, &pool_clone.inner));
+        // Clone and original share the same Arc<Shared>
+        assert!(std::sync::Arc::ptr_eq(&pool.0, &pool_clone.0));
     }
 
     #[test]
@@ -376,7 +374,7 @@ mod tests {
         let pool1 = BufferPool::builder().min_buffer_size(0).build();
         let pool2 = BufferPool::builder().min_buffer_size(0).build();
 
-        assert_ne!(pool1.inner.id, pool2.inner.id);
+        assert_ne!(pool1.0.id, pool2.0.id);
 
         let buf1 = pool1.get(4096);
         drop(buf1);
@@ -402,4 +400,6 @@ mod tests {
         // Some should have spilled to shared pool
         assert!(!pool.is_empty());
     }
+
+    // Boundary routing tests are in size_class.rs::tests
 }

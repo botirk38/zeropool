@@ -15,6 +15,15 @@ pub(crate) struct TlsState {
     pub limit: usize,
 }
 
+thread_local! {
+    /// Single consolidated TLS slot for the buffer pool.
+    ///
+    /// Uses `UnsafeCell` instead of `RefCell` to eliminate runtime borrow
+    /// checking overhead (~5ns per access). This is safe because TLS is
+    /// inherently single-threaded — only one `&mut` can exist at a time.
+    static TLS: UnsafeCell<TlsState> = const { UnsafeCell::new(TlsState::new()) };
+}
+
 impl TlsState {
     /// Create an uninitialized TLS state.
     pub const fn new() -> Self {
@@ -34,6 +43,24 @@ impl TlsState {
         }
     }
 
+    /// Access the current thread's TLS state mutably.
+    ///
+    /// # Safety contract
+    ///
+    /// This is safe because:
+    /// 1. `thread_local!` ensures only the owning thread can access the cell.
+    /// 2. The closure `f` has exclusive access — we never create overlapping
+    ///    `&mut` references since our call sites (pool get/put) are non-reentrant.
+    #[inline(always)]
+    pub fn with_current<R>(f: impl FnOnce(&mut Self) -> R) -> R {
+        TLS.with(|cell| {
+            // SAFETY: TLS is single-threaded. Our call sites (pool.get/put)
+            // never re-enter with_current while a previous borrow is alive.
+            let state = unsafe { &mut *cell.get() };
+            f(state)
+        })
+    }
+
     /// Whether this TLS state belongs to the given pool.
     #[inline(always)]
     pub fn belongs_to(&self, pool_id: u64) -> bool {
@@ -44,7 +71,6 @@ impl TlsState {
     #[inline]
     pub fn init_for(&mut self, pool_id: u64, limit: usize) {
         if self.pool_id != pool_id {
-            // Different pool — flush all caches before reuse.
             for cache in &mut self.caches {
                 cache.clear();
             }
@@ -54,7 +80,7 @@ impl TlsState {
     }
 
     /// Magazine-style batch refill: move up to `batch` buffers from the
-    /// shared `SizeClass` queue into this thread's local cache.
+    /// shared [`SizeClass`] queue into this thread's local cache.
     ///
     /// Returns how many buffers were moved.
     #[inline]
@@ -72,7 +98,7 @@ impl TlsState {
     }
 
     /// Magazine-style batch spill: move up to `batch` buffers from this
-    /// thread's local cache back to the shared `SizeClass` queue.
+    /// thread's local cache back to the shared [`SizeClass`] queue.
     #[inline]
     pub fn batch_spill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) {
         for _ in 0..batch {
@@ -85,31 +111,4 @@ impl TlsState {
             }
         }
     }
-}
-
-thread_local! {
-    /// Single consolidated TLS slot for the buffer pool.
-    ///
-    /// Uses `UnsafeCell` instead of `RefCell` to eliminate runtime borrow
-    /// checking overhead (~5ns per access). This is safe because TLS is
-    /// inherently single-threaded — only one `&mut` can exist at a time.
-    pub(crate) static TLS: UnsafeCell<TlsState> = const { UnsafeCell::new(TlsState::new()) };
-}
-
-/// Access the TLS state mutably within the current thread.
-///
-/// # Safety
-///
-/// This is safe because:
-/// 1. `thread_local!` ensures only the owning thread can access the cell.
-/// 2. The closure `f` has exclusive access — we never create overlapping
-///    `&mut` references since `with_tls` is not reentrant in our call sites.
-#[inline(always)]
-pub(crate) fn with_tls<R>(f: impl FnOnce(&mut TlsState) -> R) -> R {
-    TLS.with(|cell| {
-        // SAFETY: TLS is single-threaded. Our call sites (pool.get/put) never
-        // re-enter with_tls while a previous borrow is alive.
-        let state = unsafe { &mut *cell.get() };
-        f(state)
-    })
 }
