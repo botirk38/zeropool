@@ -4,7 +4,7 @@ use std::hint::black_box;
 use zeropool::BufferPool;
 
 fn main() {
-    let pool = BufferPool::builder().min_buffer_size(0).build();
+    let pool = BufferPool::new().min_buffer_size(0);
     // Warm up TLS
     let buf = pool.get(4096);
     drop(buf);

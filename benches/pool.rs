@@ -383,7 +383,7 @@ fn cache_behavior(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("cache_behavior/ping_pong");
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::builder().tls_cache_size(10).build();
+            let pool = BufferPool::new().tls_cache_size(10);
             pool.preallocate(20, 1024 * 1024);
             b.iter(|| {
                 for _ in 0..100 {
@@ -403,7 +403,7 @@ fn cache_behavior(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("cache_behavior/hot_cold");
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::builder().tls_cache_size(10).build();
+            let pool = BufferPool::new().tls_cache_size(10);
             pool.preallocate(10, 64 * 1024);
             b.iter(|| {
                 let mut bufs = vec![];
@@ -427,7 +427,7 @@ fn cache_behavior(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("cache_behavior/multi_size");
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::builder().tls_cache_size(15).build();
+            let pool = BufferPool::new().tls_cache_size(15);
             let sizes = [4 * 1024, 64 * 1024, 1024 * 1024];
             b.iter(|| {
                 for _ in 0..100 {
@@ -450,7 +450,7 @@ fn cache_behavior(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", tls_size),
                 &tls_size,
                 |b, &tls_size| {
-                    let pool = BufferPool::builder().tls_cache_size(15).min_buffer_size(0).build();
+                    let pool = BufferPool::new().tls_cache_size(15).min_buffer_size(0);
                     b.iter(|| {
                         let mut bufs = vec![];
                         for _ in 0..tls_size {
@@ -476,11 +476,10 @@ fn cache_behavior(c: &mut Criterion) {
         let mut group = c.benchmark_group("cache_behavior/eviction_pressure");
         group.sample_size(50);
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::builder()
+            let pool = BufferPool::new()
                 .max_buffers_per_class(100)
                 .tls_cache_size(8)
-                .min_buffer_size(4096)
-                .build();
+                .min_buffer_size(4096);
             b.iter(|| {
                 let mut bufs = vec![];
                 for _ in 0..10 {
@@ -502,7 +501,7 @@ fn cache_behavior(c: &mut Criterion) {
                 BenchmarkId::new("threads", num_threads),
                 &num_threads,
                 |b, &num_threads| {
-                    let pool = BufferPool::builder().tls_cache_size(1).min_buffer_size(0).build();
+                    let pool = BufferPool::new().tls_cache_size(1).min_buffer_size(0);
                     b.iter(|| {
                         let pool = &pool;
                         thread::scope(|s| {
@@ -537,7 +536,7 @@ fn memory_features(c: &mut Criterion) {
         let size = 1024 * 1024;
 
         group.bench_function("unpinned", |b| {
-            let pool = BufferPool::builder().pinned_memory(false).build();
+            let pool = BufferPool::new().pinned_memory(false);
             b.iter(|| {
                 let mut buf = pool.get(size);
                 black_box(&mut buf);
@@ -546,7 +545,7 @@ fn memory_features(c: &mut Criterion) {
         });
 
         group.bench_function("pinned", |b| {
-            let pool = BufferPool::builder().pinned_memory(true).build();
+            let pool = BufferPool::new().pinned_memory(true);
             b.iter(|| {
                 let mut buf = pool.get(size);
                 black_box(&mut buf);
@@ -555,7 +554,7 @@ fn memory_features(c: &mut Criterion) {
         });
 
         group.bench_function("pinned_preallocated", |b| {
-            let pool = BufferPool::builder().pinned_memory(true).build();
+            let pool = BufferPool::new().pinned_memory(true);
             pool.preallocate(10, size);
             b.iter(|| {
                 let mut buf = pool.get(size);
@@ -603,7 +602,7 @@ fn memory_features(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", max_buffers),
                 &max_buffers,
                 |b, &max_buffers| {
-                    let pool = BufferPool::builder().max_buffers_per_class(max_buffers).build();
+                    let pool = BufferPool::new().max_buffers_per_class(max_buffers);
                     b.iter(|| {
                         let mut bufs = vec![];
                         for _ in 0..(max_buffers * 2) {
@@ -658,7 +657,7 @@ fn memory_features(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", min_size),
                 &min_size,
                 |b, &min_size| {
-                    let pool = BufferPool::builder().min_buffer_size(min_size).build();
+                    let pool = BufferPool::new().min_buffer_size(min_size);
                     b.iter(|| {
                         let small_buf = pool.get(512);
                         let large_buf = pool.get(128 * 1024);
