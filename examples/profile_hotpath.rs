@@ -1,3 +1,5 @@
+//! Single-threaded get/put hot-path profiling target for callgrind.
+
 use std::hint::black_box;
 use zeropool::BufferPool;
 

@@ -1,3 +1,5 @@
+//! Multi-threaded get/put profiling target for callgrind (4 threads).
+
 use std::hint::black_box;
 use std::thread;
 use zeropool::BufferPool;
