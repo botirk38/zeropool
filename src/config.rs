@@ -1,6 +1,6 @@
 use std::thread;
 
-use crate::pool::{BufferPool, Shared};
+use crate::pool::{BufferPool, PoolState};
 use crate::size_class::ClassTable;
 
 /// Default minimum buffer size (4KB) — smallest poolable size class.
@@ -125,7 +125,7 @@ impl Builder {
 
         let batch_size = self.batch_size.unwrap_or_else(|| default_batch_size(tls_cache_size));
 
-        BufferPool::from_shared(Shared {
+        BufferPool::from_state(PoolState {
             id: BufferPool::next_id(),
             table: ClassTable::new(max_buffers_per_class),
             tls_cache_size,

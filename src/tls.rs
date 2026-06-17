@@ -52,24 +52,24 @@ impl TlsState {
     /// 2. The closure `f` has exclusive access — we never create overlapping
     ///    `&mut` references since our call sites (pool get/put) are non-reentrant.
     #[inline(always)]
-    pub fn with_current<R>(f: impl FnOnce(&mut Self) -> R) -> R {
+    pub fn with<R>(f: impl FnOnce(&mut Self) -> R) -> R {
         TLS.with(|cell| {
             // SAFETY: TLS is single-threaded. Our call sites (pool.get/put)
-            // never re-enter with_current while a previous borrow is alive.
+            // never re-enter this while a previous borrow is alive.
             let state = unsafe { &mut *cell.get() };
             f(state)
         })
     }
 
-    /// Whether this TLS state belongs to the given pool.
+    /// Whether this TLS state is owned by the given pool.
     #[inline(always)]
-    pub fn belongs_to(&self, pool_id: u64) -> bool {
+    pub fn owns(&self, pool_id: u64) -> bool {
         self.pool_id == pool_id
     }
 
-    /// Initialize (or reinitialize) this state for a specific pool.
+    /// Bind (or rebind) this TLS state to a specific pool.
     #[inline]
-    pub fn init_for(&mut self, pool_id: u64, limit: usize) {
+    pub fn bind(&mut self, pool_id: u64, limit: usize) {
         if self.pool_id != pool_id {
             for cache in &mut self.caches {
                 cache.clear();
@@ -79,28 +79,28 @@ impl TlsState {
         self.limit = limit;
     }
 
-    /// Magazine-style batch refill: move up to `batch` buffers from the
-    /// shared [`SizeClass`] queue into this thread's local cache.
+    /// Magazine-style batch refill: pop the first buffer to return directly,
+    /// then move up to `batch - 1` additional buffers into the local cache.
     ///
-    /// Returns how many buffers were moved.
+    /// Returns the first buffer (if any) to avoid a redundant push+pop cycle.
     #[inline]
-    pub fn batch_refill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) -> usize {
-        let mut moved = 0;
-        while moved < batch {
+    pub fn refill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) -> Option<Vec<u8>> {
+        let first = class.pop()?;
+        let remaining = batch.saturating_sub(1);
+        for _ in 0..remaining {
             if let Some(buf) = class.pop() {
                 self.caches[class_idx].push(buf);
-                moved += 1;
             } else {
                 break;
             }
         }
-        moved
+        Some(first)
     }
 
     /// Magazine-style batch spill: move up to `batch` buffers from this
     /// thread's local cache back to the shared [`SizeClass`] queue.
     #[inline]
-    pub fn batch_spill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) {
+    pub fn spill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) {
         for _ in 0..batch {
             if let Some(buf) = self.caches[class_idx].pop() {
                 if class.push(buf).is_err() {

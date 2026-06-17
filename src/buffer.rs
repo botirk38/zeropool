@@ -140,6 +140,7 @@ impl DerefMut for PooledBuffer {
 }
 
 impl Drop for PooledBuffer {
+    #[inline(always)]
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
             self.pool.put(buffer, self.class_idx);

@@ -68,7 +68,7 @@ impl ClassTable {
 
     /// Allocate an oversize buffer that bypasses all classes.
     #[cold]
-    pub fn allocate_oversize(size: usize) -> Vec<u8> {
+    pub fn oversize(size: usize) -> Vec<u8> {
         let mut buf = Vec::with_capacity(size);
         // SAFETY: capacity == size; all u8 bit patterns valid.
         #[allow(clippy::uninit_vec)]
@@ -182,9 +182,9 @@ impl SizeClass {
         buf
     }
 
-    /// Prepare a recycled buffer for reuse at the given length.
+    /// Resize a recycled buffer to the requested length.
     #[inline(always)]
-    pub fn prepare_recycled(buf: &mut Vec<u8>, requested_len: usize) {
+    pub fn resize(buf: &mut Vec<u8>, requested_len: usize) {
         debug_assert!(
             requested_len <= buf.capacity(),
             "requested_len ({requested_len}) > capacity ({})",
