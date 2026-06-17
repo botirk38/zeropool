@@ -1,21 +1,13 @@
-//! # ZeroPool - High-Performance Buffer Pool for Rust
+//! # ZeroPool — High-Performance Buffer Pool for Rust
 //!
 //! `ZeroPool` provides a thread-safe buffer pool optimized for high-throughput I/O workloads.
 //! It achieves exceptional performance through:
 //!
-//! - **System-aware defaults**: Automatically adapts to CPU count and hardware topology
-//! - **Thread-local caching**: Lock-free fast path with adaptive cache size (2-8 buffers)
-//! - **Sharded global pool**: Reduces contention with CPU-scaled sharding (4-128 shards)
+//! - **Size-class bucketing**: Power-of-two classes (4KB→64MB) for O(1) class selection
+//! - **Lock-free shared pool**: `crossbeam::ArrayQueue` per class — no mutexes
+//! - **Thread-local caching**: Per-class LIFO caches with magazine-style batch transfer
+//! - **Pool isolation**: Unique pool IDs prevent TLS cache cross-contamination
 //! - **Zero-copy operations**: Avoids unnecessary memory allocations and copies
-//! - **Smart buffer reuse**: First-fit allocation with configurable size limits
-//!
-//! # Performance
-//!
-//! In benchmarks with 500MB buffers, `ZeroPool` achieves:
-//! - **70% faster** than no pooling (176ms → 52ms)
-//! - **3.36x speedup** through buffer reuse
-//! - **Lock-free** fast path for single-threaded workloads
-//! - **Scales automatically** from embedded systems to 128+ core servers
 //!
 //! # Quick Start
 //!
@@ -25,91 +17,76 @@
 //! // Create a pool with smart defaults
 //! let pool = BufferPool::new();
 //!
-//! // Get a buffer
+//! // Get a buffer (returns RAII guard)
 //! let mut buffer = pool.get(1024 * 1024); // 1MB buffer
 //!
-//! // Use the buffer for I/O operations
-//! // ... read/write operations ...
-//! // Buffer automatically returned to pool when it goes out of scope
+//! // Use it — Deref<Target = [u8]> for safe slice access
+//! buffer[0] = 42;
+//!
+//! // Buffer automatically returned to pool when dropped
 //! ```
 //!
 //! # Custom Configuration
-//!
-//! Use the builder pattern for custom configuration:
 //!
 //! ```rust
 //! use zeropool::BufferPool;
 //!
 //! let pool = BufferPool::builder()
-//!     .min_buffer_size(512 * 1024)      // Keep buffers >= 512KB
-//!     .tls_cache_size(8)                // 8 buffers per thread
-//!     .max_buffers_per_shard(32)        // Up to 32 buffers per shard
-//!     .num_shards(16)                   // Override CPU-based default
+//!     .min_buffer_size(4096)           // Pool buffers ≥ 4KB
+//!     .tls_cache_size(8)               // 8 buffers per class per thread
+//!     .max_buffers_per_class(64)       // 64 buffers per class in shared pool
+//!     .batch_size(4)                   // Transfer 4 at a time (magazine)
 //!     .build();
 //! ```
 //!
-//! # System-Aware Scaling
+//! # Architecture
 //!
-//! ZeroPool automatically adapts to your system:
-//!
-//! | System | Cores | TLS Cache | Shards | Buffers/Shard | Total Capacity |
-//! |--------|-------|-----------|--------|---------------|----------------|
-//! | Embedded | 4 | 4 | 4 | 16 | 64 (~64MB) |
-//! | Laptop | 8 | 6 | 8 | 16 | 128 (~128MB) |
-//! | Workstation | 16 | 6 | 8 | 32 | 256 (~256MB) |
-//! | Small Server | 32 | 8 | 16 | 64 | 1024 (~1GB) |
-//! | Large Server | 64 | 8 | 32 | 64 | 2048 (~2GB) |
-//! | Supercompute | 128 | 8 | 64 | 64 | 4096 (~4GB) |
-//!
-//! # Safety and Security
-//!
-//! ZeroPool prioritizes safety and security with the following guarantees:
-//!
-//! - **Memory zeroing**: Buffers are not zeroed by default for maximum performance. Users should manually zero buffers if information leakage prevention is required for their use case.
-//!
-//! - **Safe memory operations**: Uses safe Rust methods like `resize()` and `fill()` to manage
-//!   buffer contents, avoiding unsafe code wherever possible. The only remaining unsafe code is
-//!   for safe trait implementations (`Send`/`Sync`).
-//!
-//! - **Safe shard indexing**: Shard index is masked with `shard_mask` (power of 2 - 1),
-//!   guaranteeing bounds. Runtime assertions verify this invariant before access.
-//!
-//! - **Optional memory pinning**: When `pinned_memory` is enabled, buffers are locked in RAM
-//!   using `mlock` to prevent swapping. This is best-effort and fails gracefully if insufficient
-//!   permissions. Useful for security-sensitive or latency-critical workloads.
+//! ```text
+//! ┌─ Thread 1 ──────────┐  ┌─ Thread 2 ──────────┐
+//! │ TLS Cache            │  │ TLS Cache            │
+//! │  [4KB]  [16KB] ...   │  │  [4KB]  [16KB] ...   │
+//! └────────┬─────────────┘  └────────┬─────────────┘
+//!          │ batch refill/spill      │
+//!          └──────────┬──────────────┘
+//!                     ▼
+//!          ┌─ Shared Pool ──────────┐
+//!          │  [4KB  ArrayQueue]     │  ← lock-free CAS
+//!          │  [16KB ArrayQueue]     │
+//!          │  [64KB ArrayQueue]     │
+//!          │  …                     │
+//!          │  [64MB ArrayQueue]     │
+//!          └────────────────────────┘
+//! ```
 //!
 //! # Ownership and Pool Return
 //!
-//! When a `PooledBuffer` is dropped normally, the buffer is returned to the pool
-//! for reuse. However, if you need to extract the underlying `Vec<u8>` and prevent
-//! pool return, use [`PooledBuffer::into_inner()`] or [`PooledBuffer::into_vec()`].
+//! When a `PooledBuffer` is dropped, the buffer returns to the pool.
+//! Use [`PooledBuffer::into_inner()`] to extract the `Vec<u8>` without
+//! returning it.
 //!
 //! ```rust
 //! use zeropool::BufferPool;
 //!
 //! let pool = BufferPool::new();
 //!
-//! // Normal usage - returns to pool on drop
+//! // Normal: returns to pool on drop
 //! {
 //!     let buffer = pool.get(1024);
-//!     // buffer is automatically returned when it goes out of scope
 //! }
 //!
-//! // Extract ownership - does NOT return to pool
+//! // Extract ownership — does NOT return to pool
 //! let buffer = pool.get(1024);
 //! let vec: Vec<u8> = buffer.into_inner();
-//! // vec is now owned, buffer was consumed
 //! ```
 
 mod buffer;
 mod config;
 mod pool;
+mod size_class;
 mod tls;
-mod utils;
 
-// Public API exports
 pub use buffer::PooledBuffer;
-pub use config::{Builder, EvictionPolicy};
+pub use config::Builder;
 pub use pool::BufferPool;
 
 #[cfg(test)]
@@ -118,33 +95,22 @@ mod tests {
 
     #[test]
     fn test_basic_pool_operations() {
-        let pool = BufferPool::new();
-
-        // Get a buffer
+        let pool = BufferPool::builder().min_buffer_size(0).build();
         let buf = pool.get(1024);
         assert_eq!(buf.len(), 1024);
-
-        // Return it (automatically on drop)
         drop(buf);
 
-        // Should reuse the buffer
         let buf2 = pool.get(1024);
         assert_eq!(buf2.len(), 1024);
     }
 
     #[test]
     fn test_buffer_sizing() {
-        // Use small min_buffer_size so we can test buffer reuse with small buffers
         let pool = BufferPool::builder().min_buffer_size(0).build();
-
-        // Request larger buffer
         let buf = pool.get(2048);
         assert_eq!(buf.len(), 2048);
+        drop(buf);
 
-        // Return it
-        drop(buf); // Auto-returned to pool
-
-        // Smaller request should reuse the buffer
         let buf2 = pool.get(1024);
         assert_eq!(buf2.len(), 1024);
         assert!(buf2.capacity() >= 2048);
@@ -156,93 +122,73 @@ mod tests {
 
         let pool = BufferPool::builder()
             .min_buffer_size(1024 * 1024)
-            .max_buffers_per_shard(16)
+            .max_buffers_per_class(16)
             .build();
 
-        let tls_cache_size = pool.config.tls_cache_size;
+        let tls_cache_size = pool.state.tls_cache_size;
         let pool_clone = pool.clone();
 
-        // Test in separate thread to ensure clean TLS state
+        // Small buffers below min_buffer_size should be discarded
         thread::spawn(move || {
-            // Fill TLS cache with small buffers
             for _ in 0..tls_cache_size {
                 let buf = pool_clone.get(512);
-                drop(buf); // Auto-returned to pool
+                drop(buf);
             }
-
-            // Next small buffer should be rejected by shared pool (below min_size)
             let small_buf = pool_clone.get(512);
-            drop(small_buf); // Auto-returned to pool
+            drop(small_buf);
         })
         .join()
         .unwrap();
 
-        // Shared pool should be empty (small buffers don't meet min_size)
-        // Note: Small buffers in TLS cache are NOT returned to pool when thread exits
         assert_eq!(pool.len(), 0);
 
-        // Test with large buffers in another thread
+        // Large buffers should be pooled
         let pool_clone = pool.clone();
         thread::spawn(move || {
-            // Create tls_cache_size + 1 buffers
             let mut buffers = Vec::new();
             for _ in 0..=tls_cache_size {
                 buffers.push(pool_clone.get(2 * 1024 * 1024));
             }
-
-            // Return them all - first tls_cache_size go to TLS, last one to shared pool
             for buf in buffers {
-                drop(buf); // Auto-returned to pool
+                drop(buf);
             }
         })
         .join()
         .unwrap();
 
-        // Only the buffer that overflowed TLS cache made it to the shared pool
-        // The tls_cache_size buffers remain in the exited thread's TLS cache
-        assert_eq!(pool.len(), 1);
+        assert!(!pool.is_empty());
     }
 
     #[test]
     fn test_max_pool_size() {
-        let pool = BufferPool::builder().min_buffer_size(0).max_buffers_per_shard(2).build();
+        let pool = BufferPool::builder()
+            .min_buffer_size(0)
+            .max_buffers_per_class(4)
+            .tls_cache_size(2)
+            .build();
 
-        let tls_cache_size = pool.config.tls_cache_size;
-        let num_shards = pool.config.num_shards;
-
-        // Fill TLS cache first, then overflow to shared pool across shards
+        // Fill and return many buffers of the same size class
         let mut buffers = Vec::new();
-
-        // Get enough buffers to fill TLS and multiple shards beyond their limits
-        // tls_cache_size go to TLS, rest distributed across shards
-        for _ in 0..(tls_cache_size + num_shards * 3) {
-            buffers.push(pool.get(1024));
+        for _ in 0..20 {
+            buffers.push(pool.get(4096));
         }
-
-        // Return them all
         for buf in buffers {
-            drop(buf); // Auto-returned to pool
+            drop(buf);
         }
 
-        // Each shard should have max 2 buffers (max_pool_size)
-        // Total should be at most num_shards * 2
-        assert!(pool.len() <= num_shards * 2);
-
-        // Verify each shard respects the limit
-        for shard in pool.shards.iter() {
-            assert!(shard.buffers.lock().len() <= 2);
-        }
+        // Shared pool should not exceed max_buffers_per_class
+        assert!(pool.len() <= 4);
     }
 
     #[test]
     fn test_thread_local_cache() {
-        let pool = BufferPool::new();
-        let cache_size = pool.config.tls_cache_size;
+        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let cache_size = pool.state.tls_cache_size;
 
-        // First tls_cache_size get/put operations should use TLS
+        // First N get/put operations should use TLS
         for _ in 0..cache_size {
-            let buf = pool.get(1024);
-            drop(buf); // Auto-returned to pool
+            let buf = pool.get(4096);
+            drop(buf);
         }
 
         // Pool should be empty (all buffers in TLS)
@@ -250,107 +196,90 @@ mod tests {
 
         // Should hit TLS for all cached buffers
         for _ in 0..cache_size {
-            let buf = pool.get(1024);
-            assert_eq!(buf.len(), 1024);
+            let buf = pool.get(4096);
+            assert_eq!(buf.len(), 4096);
         }
-
-        // Pool still empty since we consumed from TLS
-        assert_eq!(pool.len(), 0);
     }
 
     #[test]
     fn test_builder_api() {
-        // Test default builder
         let pool1 = BufferPool::builder().build();
-        assert!(!pool1.is_empty() || pool1.is_empty()); // Just verify it compiles
+        assert!(!pool1.is_empty() || pool1.is_empty());
 
-        // Test all builder methods
         let pool2 = BufferPool::builder()
-            .min_buffer_size(256 * 1024)
-            .num_shards(8)
+            .min_buffer_size(4096)
             .tls_cache_size(4)
-            .max_buffers_per_shard(16)
+            .max_buffers_per_class(16)
+            .batch_size(2)
             .build();
 
-        assert_eq!(pool2.config.min_buffer_size, 256 * 1024);
-        assert_eq!(pool2.config.num_shards, 8);
-        assert_eq!(pool2.config.tls_cache_size, 4);
-        assert_eq!(pool2.config.max_buffers_per_shard, 16);
+        assert_eq!(pool2.state.min_buffer_size, 4096);
+        assert_eq!(pool2.state.tls_cache_size, 4);
+        assert_eq!(pool2.state.batch_size, 2);
 
-        // Test that it actually works
-        let buf = pool2.get(512 * 1024);
-        assert_eq!(buf.len(), 512 * 1024);
-        drop(buf); // Auto-returned to pool
+        let buf = pool2.get(8192);
+        assert_eq!(buf.len(), 8192);
     }
 
     #[test]
     fn test_concurrent_access() {
         use std::thread;
 
-        let pool = BufferPool::new();
+        let pool = BufferPool::builder().min_buffer_size(0).build();
         let mut handles = vec![];
 
-        // Spawn 8 threads doing concurrent get/put
         for _ in 0..8 {
             let pool = pool.clone();
             handles.push(thread::spawn(move || {
                 for _ in 0..100 {
                     let buf = pool.get(4096);
                     assert_eq!(buf.len(), 4096);
-                    drop(buf); // Auto-returned to pool
+                    drop(buf);
                 }
             }));
         }
 
-        // Wait for all threads
         for handle in handles {
             handle.join().unwrap();
         }
 
-        // Pool should still be functional
-        assert!(pool.len() < 1000); // Some buffers may be pooled
+        assert!(pool.len() < 1000);
     }
 
     #[test]
     fn test_clone_shares_state() {
         let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
 
-        // Get buffers in main thread to fill TLS cache
-        let buf1 = pool.get(1024);
-        let buf2 = pool.get(1024);
-        drop(buf1); // Auto-returned to pool
-        drop(buf2); // Auto-returned to pool
+        let buf1 = pool.get(4096);
+        let buf2 = pool.get(4096);
+        drop(buf1);
+        drop(buf2);
 
-        // Clone the pool
         let pool_clone = pool.clone();
 
-        // Put a buffer in clone - should overflow to shared pool
-        let buf3 = pool_clone.get(2048);
-        let buf4 = pool_clone.get(2048);
-        let buf5 = pool_clone.get(2048);
-        drop(buf3); // Auto-returned to pool
-        drop(buf4); // Auto-returned to pool
-        drop(buf5); // Auto-returned to pool
+        let buf3 = pool_clone.get(4096);
+        let buf4 = pool_clone.get(4096);
+        let buf5 = pool_clone.get(4096);
+        drop(buf3);
+        drop(buf4);
+        drop(buf5);
 
-        // Original pool should see buffers in shared pool
-        assert!(!pool.is_empty());
+        // Clone and original share the same Arc<PoolState>
+        assert!(std::sync::Arc::ptr_eq(&pool.state, &pool_clone.state));
     }
 
     #[test]
     fn test_preallocate() {
-        let pool = BufferPool::builder().min_buffer_size(512 * 1024).num_shards(4).build();
+        let pool = BufferPool::builder().min_buffer_size(0).build();
 
         let initial_len = pool.len();
 
-        // Preallocate some buffers
-        pool.preallocate(10, 1024 * 1024);
+        pool.preallocate(10, 64 * 1024);
 
-        // Pool should have more buffers now (distributed across shards)
         assert!(pool.len() > initial_len);
 
-        // Should be able to get a preallocated buffer
-        let buf = pool.get(1024 * 1024);
-        assert!(buf.capacity() >= 1024 * 1024);
+        let buf = pool.get(64 * 1024);
+        assert!(buf.capacity() >= 64 * 1024);
     }
 
     #[test]
@@ -359,54 +288,49 @@ mod tests {
 
         let pool = BufferPool::builder().tls_cache_size(2).min_buffer_size(0).build();
 
-        // Test is_empty on new pool
         assert!(pool.is_empty());
 
         // Test zero-size buffer
         let buf_zero = pool.get(0);
         assert_eq!(buf_zero.len(), 0);
-        drop(buf_zero); // Auto-returned to pool
+        drop(buf_zero);
 
-        // Test very large buffer - fill TLS cache first, then add more
+        // Test very large buffer in separate thread
         let pool_clone = pool.clone();
         thread::spawn(move || {
-            // Fill TLS cache
-            let b1 = pool_clone.get(1024);
-            let b2 = pool_clone.get(1024);
-            drop(b1); // Auto-returned to pool
-            drop(b2); // Auto-returned to pool
+            let b1 = pool_clone.get(4096);
+            let b2 = pool_clone.get(4096);
+            drop(b1);
+            drop(b2);
 
-            // This should overflow to shared pool
-            let buf_large = pool_clone.get(100 * 1024 * 1024); // 100MB
+            let buf_large = pool_clone.get(100 * 1024 * 1024);
             assert_eq!(buf_large.len(), 100 * 1024 * 1024);
-            drop(buf_large); // Auto-returned to pool
+            drop(buf_large);
         })
         .join()
         .unwrap();
-
-        // Pool should have the large buffer now (in shared pool, not TLS)
-        assert!(!pool.is_empty());
     }
 
     #[test]
-    fn test_shard_distribution() {
+    fn test_size_class_routing() {
         use std::thread;
 
-        let pool = BufferPool::builder().num_shards(4).min_buffer_size(0).tls_cache_size(2).build();
+        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
 
-        // Spawn multiple threads to test distribution across shards
-        // Each thread has affinity to one shard, so multiple threads
-        // should distribute buffers across multiple shards
         let mut handles = vec![];
         for _ in 0..4 {
             let pool_clone = pool.clone();
             handles.push(thread::spawn(move || {
                 let mut buffers = vec![];
-                for _ in 0..5 {
-                    buffers.push(pool_clone.get(1024));
+                // Request different size classes — more than tls_cache_size
+                // to force spill into shared pool
+                for &size in &[4096, 16384, 65536, 262_144] {
+                    for _ in 0..4 {
+                        buffers.push(pool_clone.get(size));
+                    }
                 }
                 for buf in buffers {
-                    drop(buf); // Auto-returned to pool
+                    drop(buf);
                 }
             }));
         }
@@ -415,83 +339,67 @@ mod tests {
             handle.join().unwrap();
         }
 
-        // With multiple threads, buffers should be distributed across shards
-        let mut non_empty_shards = 0;
-        for shard in pool.shards.iter() {
-            if !shard.buffers.lock().is_empty() {
-                non_empty_shards += 1;
-            }
-        }
-
-        // Should have buffers in multiple shards due to thread affinity
-        assert!(non_empty_shards >= 2);
-    }
-
-    #[test]
-    fn test_eviction_policy_hot_buffers() {
-        let pool = BufferPool::builder()
-            .eviction_policy(EvictionPolicy::ClockPro)
-            .max_buffers_per_shard(5)
-            .num_shards(1)
-            .tls_cache_size(1) // Small but valid TLS cache
-            .build();
-
-        // Create 10 buffers with unique sizes
-        let sizes: Vec<usize> = (1..=10).map(|i| i * 1024).collect();
-
-        // Add 5 buffers (fill shard to max)
-        for &size in &sizes[0..5] {
-            let buf = vec![0u8; size];
-            drop(buf); // Auto-returned to pool
-        }
-
-        // Access first 3 buffers repeatedly (make them hot)
-        for _ in 0..10 {
-            for &size in &sizes[0..3] {
-                let buf = pool.get(size);
-                drop(buf); // Auto-returned to pool
-            }
-        }
-
-        // Add 5 more buffers (trigger eviction)
-        for &size in &sizes[5..10] {
-            let buf = vec![0u8; size];
-            drop(buf); // Auto-returned to pool
-        }
-
-        // Hot buffers (0-2) should still be available
-        // Cold buffers (3-4) should have been evicted
-        for &size in &sizes[0..3] {
-            let buf = pool.get(size);
-            assert_eq!(buf.capacity(), size, "Hot buffer was evicted!");
-            drop(buf); // Auto-returned to pool
-        }
+        // Threads had more buffers per class than TLS holds — some
+        // must have spilled to the shared pool.
+        assert!(!pool.is_empty());
     }
 
     #[test]
     fn test_clear() {
         let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
 
-        // Fill pool with buffers
         let mut buffers = vec![];
         for _ in 0..10 {
-            buffers.push(pool.get(1024));
+            buffers.push(pool.get(4096));
         }
         for buf in buffers {
-            drop(buf); // Auto-returned to pool
+            drop(buf);
         }
 
         assert!(!pool.is_empty());
 
-        // Clear the pool
         pool.clear();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
 
         // Pool should still work after clear
-        let buf = pool.get(1024);
-        assert_eq!(buf.len(), 1024);
-        drop(buf); // Auto-returned to pool
+        let buf = pool.get(4096);
+        assert_eq!(buf.len(), 4096);
     }
+
+    #[test]
+    fn test_pool_isolation() {
+        // Two pools should not share TLS caches
+        let pool1 = BufferPool::builder().min_buffer_size(0).build();
+        let pool2 = BufferPool::builder().min_buffer_size(0).build();
+
+        assert_ne!(pool1.state.id, pool2.state.id);
+
+        let buf1 = pool1.get(4096);
+        drop(buf1);
+
+        // pool2 should not see pool1's cached buffer
+        assert_eq!(pool2.len(), 0);
+    }
+
+    #[test]
+    fn test_batch_transfer() {
+        // Verify magazine-style batch works by overflowing TLS
+        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).batch_size(2).build();
+
+        // Fill and return more buffers than TLS holds
+        let mut buffers = Vec::new();
+        for _ in 0..10 {
+            buffers.push(pool.get(4096));
+        }
+        for buf in buffers {
+            drop(buf);
+        }
+
+        // Some should have spilled to shared pool
+        assert!(!pool.is_empty());
+    }
+
+    // Boundary routing tests are in size_class.rs::tests
 }

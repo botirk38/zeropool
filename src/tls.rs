@@ -1,29 +1,114 @@
-use std::cell::{Cell, RefCell};
+use std::cell::UnsafeCell;
 
-use crate::pool::BufferEntry;
+use crate::size_class::{NUM_CLASSES, SizeClass};
 
-/// Thread-local cache structure combining buffers and config
-pub(crate) struct TlsCache {
-    pub buffers: Vec<BufferEntry>,
-}
-
-impl TlsCache {
-    pub const fn new() -> Self {
-        Self { buffers: Vec::new() }
-    }
+/// Consolidated thread-local state for one pool instance.
+///
+/// Combines what was previously three separate `thread_local!` declarations
+/// into a single struct, reducing TLS lookup overhead on every `get`/`put`.
+pub(crate) struct TlsState {
+    /// Which pool instance owns this cache (0 = uninitialized).
+    pub pool_id: u64,
+    /// Per-size-class buffer caches.
+    pub caches: [Vec<Vec<u8>>; NUM_CLASSES],
+    /// Max buffers per class in this thread's cache.
+    pub limit: usize,
 }
 
 thread_local! {
-    /// Thread-local cache for lock-free fast path
-    /// Using RefCell for safe, runtime-checked borrowing
-    pub(crate) static TLS_CACHE: RefCell<TlsCache> = const { RefCell::new(TlsCache::new()) };
+    /// Single consolidated TLS slot for the buffer pool.
+    ///
+    /// Uses `UnsafeCell` instead of `RefCell` to eliminate runtime borrow
+    /// checking overhead (~5ns per access). This is safe because TLS is
+    /// inherently single-threaded — only one `&mut` can exist at a time.
+    static TLS: UnsafeCell<TlsState> = const { UnsafeCell::new(TlsState::new()) };
+}
 
-    /// Thread-local limit for cache size
-    /// Using Cell for zero-cost access to avoid repeated initialization checks
-    pub(crate) static TLS_LIMIT: Cell<usize> = const { Cell::new(0) };
+impl TlsState {
+    /// Create an uninitialized TLS state.
+    pub const fn new() -> Self {
+        Self {
+            pool_id: 0,
+            caches: [
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+            limit: 0,
+        }
+    }
 
-    /// Thread-local preferred shard index for cache affinity
-    /// Each thread consistently uses the same shard for better cache locality
-    /// Initialized lazily using thread ID hash
-    pub(crate) static SHARD_AFFINITY: Cell<Option<usize>> = const { Cell::new(None) };
+    /// Access the current thread's TLS state mutably.
+    ///
+    /// # Safety contract
+    ///
+    /// This is safe because:
+    /// 1. `thread_local!` ensures only the owning thread can access the cell.
+    /// 2. The closure `f` has exclusive access — we never create overlapping
+    ///    `&mut` references since our call sites (pool get/put) are non-reentrant.
+    #[inline(always)]
+    pub fn with<R>(f: impl FnOnce(&mut Self) -> R) -> R {
+        TLS.with(|cell| {
+            // SAFETY: TLS is single-threaded. Our call sites (pool.get/put)
+            // never re-enter this while a previous borrow is alive.
+            let state = unsafe { &mut *cell.get() };
+            f(state)
+        })
+    }
+
+    /// Whether this TLS state is owned by the given pool.
+    #[inline(always)]
+    pub fn owns(&self, pool_id: u64) -> bool {
+        self.pool_id == pool_id
+    }
+
+    /// Bind (or rebind) this TLS state to a specific pool.
+    #[inline]
+    pub fn bind(&mut self, pool_id: u64, limit: usize) {
+        if self.pool_id != pool_id {
+            for cache in &mut self.caches {
+                cache.clear();
+            }
+        }
+        self.pool_id = pool_id;
+        self.limit = limit;
+    }
+
+    /// Magazine-style batch refill: pop the first buffer to return directly,
+    /// then move up to `batch - 1` additional buffers into the local cache.
+    ///
+    /// Returns the first buffer (if any) to avoid a redundant push+pop cycle.
+    #[inline]
+    pub fn refill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) -> Option<Vec<u8>> {
+        let first = class.pop()?;
+        let remaining = batch.saturating_sub(1);
+        for _ in 0..remaining {
+            if let Some(buf) = class.pop() {
+                self.caches[class_idx].push(buf);
+            } else {
+                break;
+            }
+        }
+        Some(first)
+    }
+
+    /// Magazine-style batch spill: move up to `batch` buffers from this
+    /// thread's local cache back to the shared [`SizeClass`] queue.
+    #[inline]
+    pub fn spill(&mut self, class_idx: usize, class: &SizeClass, batch: usize) {
+        for _ in 0..batch {
+            if let Some(buf) = self.caches[class_idx].pop() {
+                if class.push(buf).is_err() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
 }

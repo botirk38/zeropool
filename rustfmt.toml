@@ -1,11 +1,11 @@
 # Rustfmt Configuration for ZeroPool
 # High-performance, thread-safe buffer pool library
-# Edition: 2021 | Style: Stable Rust features only
+# Edition: 2024 | Style: Stable Rust features only
 
 # =============================================================================
 # Edition & Language Features
 # =============================================================================
-edition = "2021"
+edition = "2024"
 
 # =============================================================================
 # Line Width & Wrapping
