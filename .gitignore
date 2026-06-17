@@ -22,6 +22,16 @@ target
 
 *.data
 
-# Profiling results (cargo-flamegraph)
+# Profiling results
 flamegraph.svg
+flamegraph_*.svg
 perf.data*
+callgrind_*.out
+
+# Working artifacts
+baseline_bench.txt
+typescript
+PLAN.md
+RESEARCH.md
+ARCHITECTURE_PLAN.md
+MULTI_PR_PLAN.md
