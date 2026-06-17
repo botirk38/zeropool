@@ -199,7 +199,9 @@ impl ZeroPool {
         let Some((class_idx, class)) = self.state.table.route(size) else {
             self.state.counters.oversize.fetch_add(1, Ordering::Relaxed);
             self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
-            return crate::Buf::new(self.allocate_raw(size, size), self.clone(), u8::MAX);
+            let mut buf = self.allocate_raw(size, size);
+            self.pin(&mut buf);
+            return crate::Buf::new(buf, self.clone(), u8::MAX);
         };
 
         // ── TLS fast path (lock-free) ──────────────────────────────
@@ -229,7 +231,9 @@ impl ZeroPool {
 
         // ── Cold path: fresh allocation ────────────────────────────
         self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
-        crate::Buf::new(self.allocate_raw(class.class_size, size), self.clone(), ci)
+        let mut buf = self.allocate_raw(class.class_size, size);
+        self.pin(&mut buf);
+        crate::Buf::new(buf, self.clone(), ci)
     }
 
     /// Return a buffer to the pool for reuse.
