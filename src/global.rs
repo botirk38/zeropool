@@ -106,9 +106,6 @@ impl Freelist {
         }
         // SAFETY: caller guarantees ptr has MIN_BLOCK_ALIGN alignment
         // (>= align_of::<FreeNode>()) and MIN_BLOCK_SIZE bytes (>= size_of::<FreeNode>()).
-        // The cast from *mut u8 to *mut FreeNode is valid because the caller
-        // verifies alignment >= align_of::<FreeNode>() before calling push().
-        #[allow(clippy::cast_ptr_alignment)]
         let node = ptr.cast::<FreeNode>();
         let mut head = self.head.load(Ordering::Acquire);
         loop {
