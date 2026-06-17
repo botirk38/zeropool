@@ -135,7 +135,7 @@ for ci in &s.classes {
 pool.reset_stats();
 ```
 
-Metrics use `Relaxed` atomics — zero impact on the hot path.
+Metrics use `Relaxed` atomics — negligible overhead on the hot path (benchmarks show no measurable regression).
 
 ## Thread Safety
 

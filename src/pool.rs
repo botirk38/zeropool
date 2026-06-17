@@ -113,10 +113,15 @@ impl BufferPool {
     /// Set the number of buffers kept in thread-local cache per size class.
     ///
     /// Higher values reduce shared pool access but increase per-thread memory.
+    /// Also recomputes batch size (half of TLS cache, min 2) unless
+    /// `.batch_size()` is called afterwards to override.
     /// Default: 2–8 based on CPU count
     pub fn tls_cache_size(self, size: usize) -> Self {
         assert!(size > 0, "tls_cache_size must be > 0");
-        self.rebuild(|s| s.tls_cache_size = size)
+        self.rebuild(|s| {
+            s.tls_cache_size = size;
+            s.batch_size = crate::config::default_batch_size(size);
+        })
     }
 
     /// Set the maximum number of buffers per size class in the shared pool.
