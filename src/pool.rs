@@ -1,36 +1,31 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::metrics::{Counters, PoolStats, snapshot};
+use crate::allocator::{Allocator, HeapAllocator};
 use crate::size_class::{ClassTable, SizeClass};
+use crate::stats::{Counters, Stats, snapshot};
 use crate::tls::TlsState;
 
 /// Global counter for unique pool instance IDs.
-static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Core state backing all [`BufferPool`] handles.
+/// Shared state backing all [`ZeroPool`] handles.
 ///
 /// Holds identity, class routing table, and runtime configuration.
-/// No methods — all behavior lives on [`BufferPool`].
+/// All behavior lives on [`ZeroPool`].
 #[derive(Debug)]
-pub(crate) struct PoolState {
-    /// Unique pool ID — prevents TLS cache cross-contamination.
+pub(crate) struct State {
     pub id: u64,
-    /// Size-class routing table and lock-free queues.
     pub table: ClassTable,
-    /// Max buffers per class in each thread-local cache.
     pub tls_cache_size: usize,
-    /// Minimum buffer capacity to keep in the pool.
     pub min_buffer_size: usize,
-    /// Whether to mlock buffer memory.
     pub pinned_memory: bool,
-    /// Batch size for TLS ↔ shared pool magazine transfers.
     pub batch_size: usize,
-    /// Performance counters.
     pub counters: Counters,
+    pub allocator: Box<dyn Allocator>,
 }
 
-/// A high-performance, thread-safe buffer pool with size-class bucketing.
+/// A user-space byte allocator with size-class bucketing and thread-local caching.
 ///
 /// # Architecture
 ///
@@ -60,23 +55,23 @@ pub(crate) struct PoolState {
 ///          └────────────────┘
 /// ```
 #[derive(Clone, Debug)]
-pub struct BufferPool {
-    pub(crate) state: Arc<PoolState>,
+pub struct ZeroPool {
+    pub(crate) state: Arc<State>,
 }
 
-impl BufferPool {
-    /// Create a new buffer pool with system-aware defaults.
+impl ZeroPool {
+    /// Create a new allocator with system-aware defaults.
     ///
     /// Chain configuration methods to customize before use:
     ///
     /// ```
-    /// use zeropool::BufferPool;
+    /// use zeropool::ZeroPool;
     ///
     /// // Defaults
-    /// let pool = BufferPool::new();
+    /// let pool = ZeroPool::new();
     ///
     /// // Custom
-    /// let pool = BufferPool::new()
+    /// let pool = ZeroPool::new()
     ///     .min_buffer_size(4096)
     ///     .tls_cache_size(8)
     ///     .max_buffers_per_class(64)
@@ -90,21 +85,42 @@ impl BufferPool {
         let cpus = cpu_count();
         let tls = default_tls_cache_size(cpus);
         Self {
-            state: Arc::new(PoolState {
-                id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
+            state: Arc::new(State {
+                id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 table: ClassTable::new(default_max_buffers_per_class(cpus)),
                 tls_cache_size: tls,
                 min_buffer_size: DEFAULT_MIN_BUFFER_SIZE,
                 pinned_memory: false,
                 batch_size: default_batch_size(tls),
                 counters: Counters::new(),
+                allocator: Box::new(HeapAllocator),
             }),
         }
     }
 
+    /// Set a custom allocator for buffer creation.
+    ///
+    /// Default: [`HeapAllocator`] (standard `Vec::with_capacity`).
+    ///
+    /// ```
+    /// use zeropool::{Allocator, ZeroPool};
+    ///
+    /// struct MyAllocator;
+    /// impl Allocator for MyAllocator {
+    ///     fn allocate(&self, capacity: usize) -> Vec<u8> {
+    ///         Vec::with_capacity(capacity)
+    ///     }
+    /// }
+    ///
+    /// let pool = ZeroPool::new().allocator(MyAllocator);
+    /// ```
+    pub fn allocator(self, alloc: impl Allocator) -> Self {
+        self.rebuild(|s| s.allocator = Box::new(alloc))
+    }
+
     /// Set the minimum buffer size to keep in the pool.
     ///
-    /// Buffers smaller than this are discarded when returned.
+    /// Buffers smaller than this are discarded on dealloc.
     /// Default: 4KB
     pub fn min_buffer_size(self, size: usize) -> Self {
         self.rebuild(|s| s.min_buffer_size = size)
@@ -132,7 +148,7 @@ impl BufferPool {
         self.rebuild(|s| s.table = ClassTable::new(count))
     }
 
-    /// Enable pinned memory (mlock) for pooled buffers.
+    /// Enable pinned memory (mlock) for allocated buffers.
     ///
     /// Locks buffers in RAM to prevent swapping.
     /// Default: false
@@ -149,57 +165,56 @@ impl BufferPool {
         self.rebuild(|s| s.batch_size = size)
     }
 
-    /// Apply a mutation to the inner state, reconstructing the Arc.
-    ///
-    /// Only valid at construction time (single owner).
-    fn rebuild(mut self, f: impl FnOnce(&mut PoolState)) -> Self {
+    fn rebuild(mut self, f: impl FnOnce(&mut State)) -> Self {
         let state = Arc::get_mut(&mut self.state)
             .expect("cannot reconfigure a shared pool — call config methods before cloning");
         f(state);
         self
     }
 
-    /// Get a buffer of at least the specified size from the pool.
+    /// Allocate a buffer of at least `size` bytes.
     ///
-    /// Returns a [`PooledBuffer`](crate::PooledBuffer) that automatically
-    /// returns to the pool on drop.
+    /// Returns a [`Buf`](crate::Buf) that automatically deallocates back
+    /// to the pool on drop.
     ///
     /// # Performance
     ///
-    /// 1. **Fastest**: TLS cache pop (lock-free, ~8–60ns)
+    /// 1. **Fastest**: TLS cache pop (lock-free, ~24ns)
     /// 2. **Fast**: Batch refill from shared pool (lock-free CAS)
-    /// 3. **Fallback**: Fresh allocation via `SizeClass::allocate`
+    /// 3. **Cold**: Fresh allocation via the configured [`Allocator`]
     ///
     /// # Example
     /// ```
-    /// use zeropool::BufferPool;
+    /// use zeropool::ZeroPool;
     ///
-    /// let pool = BufferPool::new();
-    /// let mut buffer = pool.get(1024);
-    /// buffer[0] = 42;
+    /// let pool = ZeroPool::new();
+    /// let mut buf = pool.alloc(1024);
+    /// buf[0] = 42;
     /// ```
     #[inline]
     #[must_use]
-    pub fn get(&self, size: usize) -> crate::PooledBuffer {
+    pub fn alloc(&self, size: usize) -> crate::Buf {
         self.state.counters.gets.fetch_add(1, Ordering::Relaxed);
 
         let Some((class_idx, class)) = self.state.table.route(size) else {
             self.state.counters.oversize.fetch_add(1, Ordering::Relaxed);
             self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
-            return crate::PooledBuffer::new(ClassTable::oversize(size), self.clone(), u8::MAX);
+            let mut buf = self.allocate_raw(size, size);
+            self.pin(&mut buf);
+            return crate::Buf::new(buf, self.clone(), u8::MAX);
         };
 
         // ── TLS fast path (lock-free) ──────────────────────────────
-        let tls_result = TlsState::with(|state| {
-            if !state.owns(self.state.id) {
-                state.bind(self.state.id, self.state.tls_cache_size);
+        let tls_result = TlsState::with(|tls| {
+            if !tls.owns(self.state.id) {
+                tls.bind(self.state.id, self.state.tls_cache_size);
             }
 
-            if let Some(buf) = state.caches[class_idx].pop() {
-                return Some((buf, true)); // true = TLS hit
+            if let Some(buf) = tls.caches[class_idx].pop() {
+                return Some((buf, true));
             }
 
-            state.refill(class_idx, class, self.state.batch_size).map(|buf| (buf, false)) // false = shared pool hit
+            tls.refill(class_idx, class, self.state.batch_size).map(|buf| (buf, false))
         });
 
         let ci = class_idx as u8;
@@ -211,20 +226,22 @@ impl BufferPool {
                 self.state.counters.shared_hits.fetch_add(1, Ordering::Relaxed);
             }
             SizeClass::resize(&mut buf, size);
-            return crate::PooledBuffer::new(buf, self.clone(), ci);
+            return crate::Buf::new(buf, self.clone(), ci);
         }
 
         // ── Cold path: fresh allocation ────────────────────────────
         self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
-        crate::PooledBuffer::new(class.allocate(size), self.clone(), ci)
+        let mut buf = self.allocate_raw(class.class_size, size);
+        self.pin(&mut buf);
+        crate::Buf::new(buf, self.clone(), ci)
     }
 
     /// Return a buffer to the pool for reuse.
     ///
-    /// `class_hint` is the class index stored in [`PooledBuffer`](crate::PooledBuffer)
+    /// `class_hint` is the class index stored in [`Buf`](crate::Buf)
     /// at allocation time (`u8::MAX` for oversize buffers that bypass pooling).
     #[inline(always)]
-    pub(crate) fn put(&self, mut buffer: Vec<u8>, class_hint: u8) {
+    pub(crate) fn dealloc(&self, mut buffer: Vec<u8>, class_hint: u8) {
         self.state.counters.puts.fetch_add(1, Ordering::Relaxed);
         buffer.clear();
 
@@ -240,8 +257,6 @@ impl BufferPool {
             return;
         }
 
-        // Use the stored class index. If the buffer was grown via
-        // io::Write, reclassify so it lands in the right queue.
         let class_idx = if cap >= ClassTable::boundary(class_hint as usize) {
             class_hint as usize
         } else {
@@ -254,19 +269,19 @@ impl BufferPool {
         self.pin(&mut buffer);
 
         // ── TLS fast path ──────────────────────────────────────────
-        let overflow = TlsState::with(|state| {
-            if !state.owns(self.state.id) {
-                state.bind(self.state.id, self.state.tls_cache_size);
+        let overflow = TlsState::with(|tls| {
+            if !tls.owns(self.state.id) {
+                tls.bind(self.state.id, self.state.tls_cache_size);
             }
 
             let class = &self.state.table[class_idx];
 
-            if state.caches[class_idx].len() >= state.limit {
-                state.spill(class_idx, class, self.state.batch_size);
+            if tls.caches[class_idx].len() >= tls.limit {
+                tls.spill(class_idx, class, self.state.batch_size);
             }
 
-            if state.caches[class_idx].len() < state.limit {
-                state.caches[class_idx].push(buffer);
+            if tls.caches[class_idx].len() < tls.limit {
+                tls.caches[class_idx].push(buffer);
                 return None;
             }
 
@@ -278,24 +293,22 @@ impl BufferPool {
         }
     }
 
-    /// Pre-allocate buffers in the pool for the given size class.
-    ///
-    /// Useful for warming up the pool before high-throughput operations.
+    /// Warm up the pool by pre-allocating buffers for the given size class.
     ///
     /// # Example
     /// ```
-    /// use zeropool::BufferPool;
+    /// use zeropool::ZeroPool;
     ///
-    /// let pool = BufferPool::new().min_buffer_size(0);
-    /// pool.preallocate(16, 64 * 1024); // 16 × 64KB buffers
+    /// let pool = ZeroPool::new().min_buffer_size(0);
+    /// pool.warm(16, 64 * 1024); // 16 × 64KB buffers
     /// ```
-    pub fn preallocate(&self, count: usize, size: usize) {
+    pub fn warm(&self, count: usize, size: usize) {
         let Some((_, class)) = self.state.table.route(size) else {
             return;
         };
 
         for _ in 0..count {
-            let mut buf = Vec::with_capacity(class.class_size);
+            let mut buf = self.state.allocator.allocate(class.class_size);
             self.pin(&mut buf);
             if class.push(buf).is_err() {
                 break;
@@ -324,30 +337,27 @@ impl BufferPool {
     /// Drain all buffers from all shared size classes.
     ///
     /// Thread-local caches are NOT cleared.
-    pub fn clear(&self) {
+    pub fn drain(&self) {
         self.state.table.clear_all();
     }
 
-    /// Point-in-time snapshot of pool statistics.
-    ///
-    /// Includes aggregate counters (gets, hits, allocations, discards),
-    /// derived rates, and per-class buffer counts.
+    /// Point-in-time snapshot of allocator statistics.
     ///
     /// # Example
     /// ```
-    /// use zeropool::BufferPool;
+    /// use zeropool::ZeroPool;
     ///
-    /// let pool = BufferPool::new().min_buffer_size(0);
-    /// let buf = pool.get(4096);
+    /// let pool = ZeroPool::new().min_buffer_size(0);
+    /// let buf = pool.alloc(4096);
     /// drop(buf);
     ///
     /// let s = pool.stats();
     /// assert_eq!(s.gets, 1);
     /// assert_eq!(s.puts, 1);
-    /// println!("{s}"); // human-readable summary
+    /// println!("{s}");
     /// ```
     #[inline]
-    pub fn stats(&self) -> PoolStats {
+    pub fn stats(&self) -> Stats {
         snapshot(&self.state.counters, self.state.table.classes())
     }
 
@@ -356,10 +366,20 @@ impl BufferPool {
         self.state.counters.reset();
     }
 
+    /// Allocate a raw buffer via the configured allocator and set its length.
+    #[cold]
+    fn allocate_raw(&self, capacity: usize, len: usize) -> Vec<u8> {
+        let mut buf = self.state.allocator.allocate(capacity);
+        // SAFETY: allocator guarantees capacity >= `capacity` >= `len`.
+        // All u8 bit patterns are valid.
+        #[allow(clippy::uninit_vec)]
+        unsafe {
+            buf.set_len(len);
+        }
+        buf
+    }
+
     /// Pin buffer memory to RAM if configured.
-    ///
-    /// Encapsulates the full pin workflow: set len = capacity, mlock, clear.
-    /// No-op when `pinned_memory` is false.
     #[inline(always)]
     fn pin(&self, buffer: &mut Vec<u8>) {
         if !self.state.pinned_memory {
@@ -369,14 +389,13 @@ impl BufferPool {
             return;
         }
         // SAFETY: capacity was allocated; all u8 patterns valid.
-        // Temporarily set len = capacity so mlock sees the full allocation.
         unsafe { buffer.set_len(buffer.capacity()) };
         let _ = region::lock(buffer.as_ptr(), buffer.len());
         buffer.clear();
     }
 }
 
-impl Default for BufferPool {
+impl Default for ZeroPool {
     fn default() -> Self {
         Self::new()
     }

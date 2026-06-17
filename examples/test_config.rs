@@ -1,15 +1,12 @@
-//! Example demonstrating BufferPool configuration options
-use zeropool::BufferPool;
+//! Example demonstrating ZeroPool configuration options
+use zeropool::ZeroPool;
 
-/// Main function demonstrating pool configuration and usage
 fn main() {
-    // Simple default pool
-    let pool = BufferPool::new();
+    let pool = ZeroPool::new();
     println!("Created pool with default configuration");
     println!("Pool has {} buffers", pool.len());
 
-    // Custom configuration
-    let custom_pool = BufferPool::new()
+    let custom_pool = ZeroPool::new()
         .tls_cache_size(8)
         .max_buffers_per_class(32)
         .min_buffer_size(4096)
@@ -18,12 +15,10 @@ fn main() {
     println!("\nCreated custom pool");
     println!("Pool has {} buffers", custom_pool.len());
 
-    // Test buffer operations
     {
-        let buf = custom_pool.get(1024 * 1024);
-        println!("\nGot buffer of size {} bytes", buf.len());
-        // Buffer automatically returned to pool when dropped
+        let buf = custom_pool.alloc(1024 * 1024);
+        println!("\nAllocated buffer of size {} bytes", buf.len());
     }
-    println!("Returned buffer to pool");
+    println!("Deallocated buffer back to pool");
     println!("Pool now has {} buffers", custom_pool.len());
 }

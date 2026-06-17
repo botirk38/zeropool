@@ -1,117 +1,128 @@
-//! # ZeroPool — High-Performance Buffer Pool for Rust
+//! # ZeroPool — A User-Space Byte Allocator for Rust
 //!
-//! `ZeroPool` provides a thread-safe buffer pool optimized for high-throughput I/O workloads.
-//! It achieves exceptional performance through:
+//! `ZeroPool` is a high-performance, thread-safe byte allocator that recycles
+//! buffers through size-class bucketing and thread-local caching.
 //!
 //! - **Size-class bucketing**: Power-of-two classes (4KB→64MB) for O(1) class selection
 //! - **Lock-free shared pool**: `crossbeam::ArrayQueue` per class — no mutexes
 //! - **Thread-local caching**: Per-class LIFO caches with magazine-style batch transfer
 //! - **Pool isolation**: Unique pool IDs prevent TLS cache cross-contamination
-//! - **Zero-copy operations**: Avoids unnecessary memory allocations and copies
+//! - **Pluggable allocator**: Custom buffer creation via the [`Allocator`] trait
 //!
 //! # Quick Start
 //!
 //! ```rust
-//! use zeropool::BufferPool;
+//! use zeropool::ZeroPool;
 //!
-//! // Create a pool with smart defaults
-//! let pool = BufferPool::new();
+//! let pool = ZeroPool::new();
 //!
-//! // Get a buffer (returns RAII guard)
-//! let mut buffer = pool.get(1024 * 1024); // 1MB buffer
-//!
-//! // Use it — Deref<Target = [u8]> for safe slice access
-//! buffer[0] = 42;
-//!
-//! // Buffer automatically returned to pool when dropped
+//! let mut buf = pool.alloc(1024 * 1024); // 1MB — returned as RAII guard
+//! buf[0] = 42;                            // Deref<Target = [u8]>
+//! // automatically deallocated back to pool on drop
 //! ```
 //!
 //! # Custom Configuration
 //!
 //! ```rust
-//! use zeropool::BufferPool;
+//! use zeropool::ZeroPool;
 //!
-//! let pool = BufferPool::new()
-//!     .min_buffer_size(4096)           // Pool buffers ≥ 4KB
+//! let pool = ZeroPool::new()
+//!     .min_buffer_size(4096)           // discard buffers < 4KB on dealloc
 //!     .tls_cache_size(8)               // 8 buffers per class per thread
 //!     .max_buffers_per_class(64)       // 64 buffers per class in shared pool
-//!     .batch_size(4);                  // Transfer 4 at a time (magazine)
+//!     .batch_size(4);                  // transfer 4 at a time (magazine)
 //! ```
 //!
-//! # Architecture
-//!
-//! ```text
-//! ┌─ Thread 1 ──────────┐  ┌─ Thread 2 ──────────┐
-//! │ TLS Cache            │  │ TLS Cache            │
-//! │  [4KB]  [16KB] ...   │  │  [4KB]  [16KB] ...   │
-//! └────────┬─────────────┘  └────────┬─────────────┘
-//!          │ batch refill/spill      │
-//!          └──────────┬──────────────┘
-//!                     ▼
-//!          ┌─ Shared Pool ──────────┐
-//!          │  [4KB  ArrayQueue]     │  ← lock-free CAS
-//!          │  [16KB ArrayQueue]     │
-//!          │  [64KB ArrayQueue]     │
-//!          │  …                     │
-//!          │  [64MB ArrayQueue]     │
-//!          └────────────────────────┘
-//! ```
-//!
-//! # Ownership and Pool Return
-//!
-//! When a `PooledBuffer` is dropped, the buffer returns to the pool.
-//! Use [`PooledBuffer::into_inner()`] to extract the `Vec<u8>` without
-//! returning it.
+//! # Pluggable Allocator
 //!
 //! ```rust
-//! use zeropool::BufferPool;
+//! use zeropool::{Allocator, ZeroPool};
 //!
-//! let pool = BufferPool::new();
+//! struct PrefaultAllocator;
+//! impl Allocator for PrefaultAllocator {
+//!     fn allocate(&self, capacity: usize) -> Vec<u8> {
+//!         let mut buf = Vec::with_capacity(capacity);
+//!         buf.resize(capacity, 0); // pre-fault pages
+//!         buf.clear();
+//!         buf
+//!     }
+//! }
 //!
-//! // Normal: returns to pool on drop
+//! let pool = ZeroPool::new().allocator(PrefaultAllocator);
+//! ```
+//!
+//! # Ownership
+//!
+//! When a [`Buf`] is dropped, it deallocates back to the pool.
+//! Use [`Buf::into_inner()`] to extract the `Vec<u8>` without returning it.
+//!
+//! ```rust
+//! use zeropool::ZeroPool;
+//!
+//! let pool = ZeroPool::new();
+//!
+//! // Normal: deallocates back to pool on drop
 //! {
-//!     let buffer = pool.get(1024);
+//!     let buf = pool.alloc(1024);
 //! }
 //!
 //! // Extract ownership — does NOT return to pool
-//! let buffer = pool.get(1024);
-//! let vec: Vec<u8> = buffer.into_inner();
+//! let buf = pool.alloc(1024);
+//! let vec: Vec<u8> = buf.into_inner();
 //! ```
 
-mod buffer;
+mod allocator;
+mod buf;
 mod config;
-mod metrics;
 mod pool;
 mod size_class;
+mod stats;
 mod tls;
 
-pub use buffer::PooledBuffer;
-pub use metrics::{ClassInfo, PoolStats};
-pub use pool::BufferPool;
+pub use allocator::{Allocator, HeapAllocator};
+pub use buf::Buf;
+pub use pool::ZeroPool;
+pub use stats::{ClassInfo, Stats};
+
+/// Allocate a buffer from a pool.
+///
+/// ```
+/// use zeropool::{ZeroPool, pool_vec};
+///
+/// let pool = ZeroPool::new();
+/// let buf = pool_vec!(pool, 4096);
+/// assert_eq!(buf.len(), 4096);
+/// ```
+#[macro_export]
+macro_rules! pool_vec {
+    ($pool:expr, $size:expr) => {
+        $pool.alloc($size)
+    };
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_basic_pool_operations() {
-        let pool = BufferPool::new().min_buffer_size(0);
-        let buf = pool.get(1024);
+    fn test_basic_operations() {
+        let pool = ZeroPool::new().min_buffer_size(0);
+        let buf = pool.alloc(1024);
         assert_eq!(buf.len(), 1024);
         drop(buf);
 
-        let buf2 = pool.get(1024);
+        let buf2 = pool.alloc(1024);
         assert_eq!(buf2.len(), 1024);
     }
 
     #[test]
     fn test_buffer_sizing() {
-        let pool = BufferPool::new().min_buffer_size(0);
-        let buf = pool.get(2048);
+        let pool = ZeroPool::new().min_buffer_size(0);
+        let buf = pool.alloc(2048);
         assert_eq!(buf.len(), 2048);
         drop(buf);
 
-        let buf2 = pool.get(1024);
+        let buf2 = pool.alloc(1024);
         assert_eq!(buf2.len(), 1024);
         assert!(buf2.capacity() >= 2048);
     }
@@ -120,18 +131,17 @@ mod tests {
     fn test_min_size_filtering() {
         use std::thread;
 
-        let pool = BufferPool::new().min_buffer_size(1024 * 1024).max_buffers_per_class(16);
+        let pool = ZeroPool::new().min_buffer_size(1024 * 1024).max_buffers_per_class(16);
 
         let tls_cache_size = pool.state.tls_cache_size;
         let pool_clone = pool.clone();
 
-        // Small buffers below min_buffer_size should be discarded
         thread::spawn(move || {
             for _ in 0..tls_cache_size {
-                let buf = pool_clone.get(512);
+                let buf = pool_clone.alloc(512);
                 drop(buf);
             }
-            let small_buf = pool_clone.get(512);
+            let small_buf = pool_clone.alloc(512);
             drop(small_buf);
         })
         .join()
@@ -139,12 +149,11 @@ mod tests {
 
         assert_eq!(pool.len(), 0);
 
-        // Large buffers should be pooled
         let pool_clone = pool.clone();
         thread::spawn(move || {
             let mut buffers = Vec::new();
             for _ in 0..=tls_cache_size {
-                buffers.push(pool_clone.get(2 * 1024 * 1024));
+                buffers.push(pool_clone.alloc(2 * 1024 * 1024));
             }
             for buf in buffers {
                 drop(buf);
@@ -158,48 +167,43 @@ mod tests {
 
     #[test]
     fn test_max_pool_size() {
-        let pool = BufferPool::new().min_buffer_size(0).max_buffers_per_class(4).tls_cache_size(2);
+        let pool = ZeroPool::new().min_buffer_size(0).max_buffers_per_class(4).tls_cache_size(2);
 
-        // Fill and return many buffers of the same size class
         let mut buffers = Vec::new();
         for _ in 0..20 {
-            buffers.push(pool.get(4096));
+            buffers.push(pool.alloc(4096));
         }
         for buf in buffers {
             drop(buf);
         }
 
-        // Shared pool should not exceed max_buffers_per_class
         assert!(pool.len() <= 4);
     }
 
     #[test]
     fn test_thread_local_cache() {
-        let pool = BufferPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0);
         let cache_size = pool.state.tls_cache_size;
 
-        // First N get/put operations should use TLS
         for _ in 0..cache_size {
-            let buf = pool.get(4096);
+            let buf = pool.alloc(4096);
             drop(buf);
         }
 
-        // Pool should be empty (all buffers in TLS)
         assert_eq!(pool.len(), 0);
 
-        // Should hit TLS for all cached buffers
         for _ in 0..cache_size {
-            let buf = pool.get(4096);
+            let buf = pool.alloc(4096);
             assert_eq!(buf.len(), 4096);
         }
     }
 
     #[test]
     fn test_config_api() {
-        let pool1 = BufferPool::new();
+        let pool1 = ZeroPool::new();
         assert!(!pool1.is_empty() || pool1.is_empty());
 
-        let pool2 = BufferPool::new()
+        let pool2 = ZeroPool::new()
             .min_buffer_size(4096)
             .tls_cache_size(4)
             .max_buffers_per_class(16)
@@ -209,7 +213,7 @@ mod tests {
         assert_eq!(pool2.state.tls_cache_size, 4);
         assert_eq!(pool2.state.batch_size, 2);
 
-        let buf = pool2.get(8192);
+        let buf = pool2.alloc(8192);
         assert_eq!(buf.len(), 8192);
     }
 
@@ -217,14 +221,14 @@ mod tests {
     fn test_concurrent_access() {
         use std::thread;
 
-        let pool = BufferPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0);
         let mut handles = vec![];
 
         for _ in 0..8 {
             let pool = pool.clone();
             handles.push(thread::spawn(move || {
                 for _ in 0..100 {
-                    let buf = pool.get(4096);
+                    let buf = pool.alloc(4096);
                     assert_eq!(buf.len(), 4096);
                     drop(buf);
                 }
@@ -240,37 +244,36 @@ mod tests {
 
     #[test]
     fn test_clone_shares_state() {
-        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2);
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2);
 
-        let buf1 = pool.get(4096);
-        let buf2 = pool.get(4096);
+        let buf1 = pool.alloc(4096);
+        let buf2 = pool.alloc(4096);
         drop(buf1);
         drop(buf2);
 
         let pool_clone = pool.clone();
 
-        let buf3 = pool_clone.get(4096);
-        let buf4 = pool_clone.get(4096);
-        let buf5 = pool_clone.get(4096);
+        let buf3 = pool_clone.alloc(4096);
+        let buf4 = pool_clone.alloc(4096);
+        let buf5 = pool_clone.alloc(4096);
         drop(buf3);
         drop(buf4);
         drop(buf5);
 
-        // Clone and original share the same Arc<PoolState>
         assert!(std::sync::Arc::ptr_eq(&pool.state, &pool_clone.state));
     }
 
     #[test]
-    fn test_preallocate() {
-        let pool = BufferPool::new().min_buffer_size(0);
+    fn test_warm() {
+        let pool = ZeroPool::new().min_buffer_size(0);
 
         let initial_len = pool.len();
 
-        pool.preallocate(10, 64 * 1024);
+        pool.warm(10, 64 * 1024);
 
         assert!(pool.len() > initial_len);
 
-        let buf = pool.get(64 * 1024);
+        let buf = pool.alloc(64 * 1024);
         assert!(buf.capacity() >= 64 * 1024);
     }
 
@@ -278,24 +281,22 @@ mod tests {
     fn test_edge_cases() {
         use std::thread;
 
-        let pool = BufferPool::new().tls_cache_size(2).min_buffer_size(0);
+        let pool = ZeroPool::new().tls_cache_size(2).min_buffer_size(0);
 
         assert!(pool.is_empty());
 
-        // Test zero-size buffer
-        let buf_zero = pool.get(0);
+        let buf_zero = pool.alloc(0);
         assert_eq!(buf_zero.len(), 0);
         drop(buf_zero);
 
-        // Test very large buffer in separate thread
         let pool_clone = pool.clone();
         thread::spawn(move || {
-            let b1 = pool_clone.get(4096);
-            let b2 = pool_clone.get(4096);
+            let b1 = pool_clone.alloc(4096);
+            let b2 = pool_clone.alloc(4096);
             drop(b1);
             drop(b2);
 
-            let buf_large = pool_clone.get(100 * 1024 * 1024);
+            let buf_large = pool_clone.alloc(100 * 1024 * 1024);
             assert_eq!(buf_large.len(), 100 * 1024 * 1024);
             drop(buf_large);
         })
@@ -307,18 +308,16 @@ mod tests {
     fn test_size_class_routing() {
         use std::thread;
 
-        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2);
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2);
 
         let mut handles = vec![];
         for _ in 0..4 {
             let pool_clone = pool.clone();
             handles.push(thread::spawn(move || {
                 let mut buffers = vec![];
-                // Request different size classes — more than tls_cache_size
-                // to force spill into shared pool
                 for &size in &[4096, 16384, 65536, 262_144] {
                     for _ in 0..4 {
-                        buffers.push(pool_clone.get(size));
+                        buffers.push(pool_clone.alloc(size));
                     }
                 }
                 for buf in buffers {
@@ -331,18 +330,16 @@ mod tests {
             handle.join().unwrap();
         }
 
-        // Threads had more buffers per class than TLS holds — some
-        // must have spilled to the shared pool.
         assert!(!pool.is_empty());
     }
 
     #[test]
-    fn test_clear() {
-        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2);
+    fn test_drain() {
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2);
 
         let mut buffers = vec![];
         for _ in 0..10 {
-            buffers.push(pool.get(4096));
+            buffers.push(pool.alloc(4096));
         }
         for buf in buffers {
             drop(buf);
@@ -350,58 +347,52 @@ mod tests {
 
         assert!(!pool.is_empty());
 
-        pool.clear();
+        pool.drain();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
 
-        // Pool should still work after clear
-        let buf = pool.get(4096);
+        let buf = pool.alloc(4096);
         assert_eq!(buf.len(), 4096);
     }
 
     #[test]
     fn test_pool_isolation() {
-        // Two pools should not share TLS caches
-        let pool1 = BufferPool::new().min_buffer_size(0);
-        let pool2 = BufferPool::new().min_buffer_size(0);
+        let pool1 = ZeroPool::new().min_buffer_size(0);
+        let pool2 = ZeroPool::new().min_buffer_size(0);
 
         assert_ne!(pool1.state.id, pool2.state.id);
 
-        let buf1 = pool1.get(4096);
+        let buf1 = pool1.alloc(4096);
         drop(buf1);
 
-        // pool2 should not see pool1's cached buffer
         assert_eq!(pool2.len(), 0);
     }
 
     #[test]
     fn test_batch_transfer() {
-        // Verify magazine-style batch works by overflowing TLS
-        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2).batch_size(2);
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2).batch_size(2);
 
-        // Fill and return more buffers than TLS holds
         let mut buffers = Vec::new();
         for _ in 0..10 {
-            buffers.push(pool.get(4096));
+            buffers.push(pool.alloc(4096));
         }
         for buf in buffers {
             drop(buf);
         }
 
-        // Some should have spilled to shared pool
         assert!(!pool.is_empty());
     }
 
     #[test]
     fn test_stats_counters() {
-        let pool = BufferPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0);
 
         let s = pool.stats();
         assert_eq!(s.gets, 0);
         assert_eq!(s.puts, 0);
 
-        let buf = pool.get(4096);
+        let buf = pool.alloc(4096);
         let s = pool.stats();
         assert_eq!(s.gets, 1);
         assert_eq!(s.allocations, 1);
@@ -413,14 +404,12 @@ mod tests {
 
     #[test]
     fn test_stats_hit_rates() {
-        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(4);
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(4);
 
-        // First get → allocation (cold)
-        let buf = pool.get(4096);
+        let buf = pool.alloc(4096);
         drop(buf);
 
-        // Second get → TLS hit (warm)
-        let buf = pool.get(4096);
+        let buf = pool.alloc(4096);
         drop(buf);
 
         let s = pool.stats();
@@ -431,9 +420,9 @@ mod tests {
 
     #[test]
     fn test_stats_oversize() {
-        let pool = BufferPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0);
 
-        let buf = pool.get(128 * 1024 * 1024);
+        let buf = pool.alloc(128 * 1024 * 1024);
         let s = pool.stats();
         assert_eq!(s.oversize, 1);
 
@@ -444,9 +433,9 @@ mod tests {
 
     #[test]
     fn test_stats_reset() {
-        let pool = BufferPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0);
 
-        let buf = pool.get(4096);
+        let buf = pool.alloc(4096);
         drop(buf);
         assert!(pool.stats().gets > 0);
 
@@ -458,8 +447,8 @@ mod tests {
 
     #[test]
     fn test_stats_display() {
-        let pool = BufferPool::new().min_buffer_size(0);
-        let buf = pool.get(4096);
+        let pool = ZeroPool::new().min_buffer_size(0);
+        let buf = pool.alloc(4096);
         drop(buf);
 
         let output = format!("{}", pool.stats());
@@ -469,13 +458,32 @@ mod tests {
 
     #[test]
     fn test_stats_class_info() {
-        let pool = BufferPool::new().min_buffer_size(0);
-        pool.preallocate(4, 4096);
+        let pool = ZeroPool::new().min_buffer_size(0);
+        pool.warm(4, 4096);
 
         let s = pool.stats();
         assert_eq!(s.classes.len(), 8);
         assert!(s.classes.iter().any(|c| c.buffered >= 4));
     }
 
-    // Boundary routing tests are in size_class.rs::tests
+    #[test]
+    fn test_pool_vec_macro() {
+        let pool = ZeroPool::new();
+        let buf = pool_vec!(pool, 1024);
+        assert_eq!(buf.len(), 1024);
+    }
+
+    #[test]
+    fn test_custom_allocator() {
+        struct DoubleCapAllocator;
+        impl Allocator for DoubleCapAllocator {
+            fn allocate(&self, capacity: usize) -> Vec<u8> {
+                Vec::with_capacity(capacity * 2)
+            }
+        }
+
+        let pool = ZeroPool::new().allocator(DoubleCapAllocator).min_buffer_size(0);
+        let buf = pool.alloc(4096);
+        assert!(buf.capacity() >= 8192);
+    }
 }

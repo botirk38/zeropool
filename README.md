@@ -1,6 +1,6 @@
 # ZeroPool
 
-A high-performance, lock-free buffer pool for Rust.
+A user-space byte allocator for Rust.
 
 [![Crates.io](https://img.shields.io/crates/v/zeropool.svg)](https://crates.io/crates/zeropool)
 [![Docs](https://docs.rs/zeropool/badge.svg)](https://docs.rs/zeropool)
@@ -9,13 +9,13 @@ A high-performance, lock-free buffer pool for Rust.
 ## Usage
 
 ```rust
-use zeropool::BufferPool;
+use zeropool::ZeroPool;
 
-let pool = BufferPool::new();
+let pool = ZeroPool::new();
 
-let mut buf = pool.get(1024 * 1024); // 1MB — returned as RAII guard
-buf[0] = 42;                         // Deref<Target = [u8]>
-// automatically returned to pool on drop
+let mut buf = pool.alloc(1024 * 1024); // 1MB — returned as RAII guard
+buf[0] = 42;                            // Deref<Target = [u8]>
+// automatically deallocated back to pool on drop
 ```
 
 ## How it works
@@ -29,12 +29,32 @@ Buffers are routed into 8 power-of-two size classes (4KB–64MB). Each thread ke
 Defaults are auto-tuned to CPU count. Override as needed:
 
 ```rust
-let pool = BufferPool::new()
+let pool = ZeroPool::new()
     .tls_cache_size(8)           // per-class per-thread cache depth
     .max_buffers_per_class(64)   // shared pool capacity per class
     .min_buffer_size(4096)       // discard returned buffers smaller than this
     .batch_size(4)               // TLS <-> shared transfer size
     .pinned_memory(true);        // mlock buffers to prevent swapping
+```
+
+## Pluggable Allocator
+
+Control how buffers are created with a custom [`Allocator`](https://docs.rs/zeropool/latest/zeropool/trait.Allocator.html):
+
+```rust
+use zeropool::{Allocator, ZeroPool};
+
+struct PrefaultAllocator;
+impl Allocator for PrefaultAllocator {
+    fn allocate(&self, capacity: usize) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(capacity);
+        buf.resize(capacity, 0); // pre-fault pages
+        buf.clear();
+        buf
+    }
+}
+
+let pool = ZeroPool::new().allocator(PrefaultAllocator);
 ```
 
 ## Statistics
@@ -52,7 +72,7 @@ Counters use `Relaxed` atomics — no measurable overhead on the hot path.
 
 ## Thread safety
 
-`BufferPool` is `Clone + Send + Sync` (`Arc<PoolState>` internally). Each clone shares the same pool; each thread gets its own TLS cache automatically.
+`ZeroPool` is `Clone + Send + Sync` (`Arc<State>` internally). Each clone shares the same pool; each thread gets its own TLS cache automatically.
 
 ## Benchmarks
 

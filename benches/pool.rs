@@ -12,7 +12,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use std::hint::black_box;
 use std::sync::Arc;
 use std::thread;
-use zeropool::BufferPool;
+use zeropool::ZeroPool;
 
 // ── Single-thread comparisons ──────────────────────────────────────────
 
@@ -23,9 +23,9 @@ fn single_thread(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(size as u64));
 
         group.bench_with_input(BenchmarkId::new("zeropool", size), &size, |b, &size| {
-            let pool = BufferPool::new();
+            let pool = ZeroPool::new();
             b.iter(|| {
-                let mut buf = pool.get(size);
+                let mut buf = pool.alloc(size);
                 black_box(&mut buf);
                 drop(buf);
             });
@@ -93,7 +93,7 @@ fn multi_thread(c: &mut Criterion) {
             &num_threads,
             |b, &num_threads| {
                 use std::sync::Barrier;
-                let pool = Arc::new(BufferPool::new());
+                let pool = Arc::new(ZeroPool::new());
                 let barrier_start = Arc::new(Barrier::new(num_threads + 1));
                 let barrier_end = Arc::new(Barrier::new(num_threads + 1));
 
@@ -107,7 +107,7 @@ fn multi_thread(c: &mut Criterion) {
                             loop {
                                 barrier_start.wait();
                                 for _ in 0..ITERATIONS_PER_THREAD {
-                                    let mut buf = pool.get(size);
+                                    let mut buf = pool.alloc(size);
                                     black_box(&mut buf);
                                     drop(buf);
                                 }
@@ -253,11 +253,11 @@ fn allocation_patterns(c: &mut Criterion) {
         let mut group = c.benchmark_group("allocation_patterns/varied");
 
         group.bench_function("zeropool", |b| {
-            let pool = BufferPool::new();
+            let pool = ZeroPool::new();
             let sizes = [1024, 4096, 16384, 65536, 256 * 1024];
             b.iter(|| {
                 for &s in &sizes {
-                    let buf = pool.get(s);
+                    let buf = pool.alloc(s);
                     black_box(&buf);
                     drop(buf);
                 }
@@ -282,12 +282,12 @@ fn allocation_patterns(c: &mut Criterion) {
         let mut group = c.benchmark_group("allocation_patterns/reuse");
 
         group.bench_function("zeropool", |b| {
-            let pool = BufferPool::new();
-            pool.preallocate(10, size);
+            let pool = ZeroPool::new();
+            pool.warm(10, size);
             b.iter(|| {
                 let mut bufs = vec![];
                 for _ in 0..10 {
-                    bufs.push(pool.get(size));
+                    bufs.push(pool.alloc(size));
                 }
                 for buf in bufs {
                     black_box(&buf);
@@ -316,11 +316,11 @@ fn allocation_patterns(c: &mut Criterion) {
         let mut group = c.benchmark_group("allocation_patterns/burst");
 
         group.bench_function("zeropool_100", |b| {
-            let pool = BufferPool::new();
+            let pool = ZeroPool::new();
             b.iter(|| {
                 let mut bufs = vec![];
                 for _ in 0..100 {
-                    bufs.push(pool.get(size));
+                    bufs.push(pool.alloc(size));
                 }
                 for buf in bufs {
                     drop(buf);
@@ -349,11 +349,11 @@ fn allocation_patterns(c: &mut Criterion) {
         let sizes = [(1024, 50), (4096, 25), (16384, 15), (65536, 7), (262_144, 3)];
 
         group.bench_function("zeropool", |b| {
-            let pool = BufferPool::new();
+            let pool = ZeroPool::new();
             b.iter(|| {
                 for &(s, count) in &sizes {
                     for _ in 0..count {
-                        let buf = pool.get(s);
+                        let buf = pool.alloc(s);
                         black_box(&buf);
                         drop(buf);
                     }
@@ -383,12 +383,12 @@ fn cache_behavior(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("cache_behavior/ping_pong");
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::new().tls_cache_size(10);
-            pool.preallocate(20, 1024 * 1024);
+            let pool = ZeroPool::new().tls_cache_size(10);
+            pool.warm(20, 1024 * 1024);
             b.iter(|| {
                 for _ in 0..100 {
-                    let buf1 = pool.get(1024);
-                    let buf2 = pool.get(1024 * 1024);
+                    let buf1 = pool.alloc(1024);
+                    let buf2 = pool.alloc(1024 * 1024);
                     black_box(&buf1);
                     black_box(&buf2);
                     drop(buf1);
@@ -403,12 +403,12 @@ fn cache_behavior(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("cache_behavior/hot_cold");
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::new().tls_cache_size(10);
-            pool.preallocate(10, 64 * 1024);
+            let pool = ZeroPool::new().tls_cache_size(10);
+            pool.warm(10, 64 * 1024);
             b.iter(|| {
                 let mut bufs = vec![];
                 for _ in 0..3 {
-                    bufs.push(pool.get(64 * 1024));
+                    bufs.push(pool.alloc(64 * 1024));
                 }
                 for _ in 0..1000 {
                     for buf in &bufs {
@@ -427,12 +427,12 @@ fn cache_behavior(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("cache_behavior/multi_size");
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::new().tls_cache_size(15);
+            let pool = ZeroPool::new().tls_cache_size(15);
             let sizes = [4 * 1024, 64 * 1024, 1024 * 1024];
             b.iter(|| {
                 for _ in 0..100 {
                     for &s in &sizes {
-                        let buf = pool.get(s);
+                        let buf = pool.alloc(s);
                         black_box(&buf);
                         drop(buf);
                     }
@@ -450,11 +450,11 @@ fn cache_behavior(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", tls_size),
                 &tls_size,
                 |b, &tls_size| {
-                    let pool = BufferPool::new().tls_cache_size(15).min_buffer_size(0);
+                    let pool = ZeroPool::new().tls_cache_size(15).min_buffer_size(0);
                     b.iter(|| {
                         let mut bufs = vec![];
                         for _ in 0..tls_size {
-                            bufs.push(pool.get(64 * 1024));
+                            bufs.push(pool.alloc(64 * 1024));
                         }
                         for _ in 0..10 {
                             for buf in &bufs {
@@ -476,14 +476,14 @@ fn cache_behavior(c: &mut Criterion) {
         let mut group = c.benchmark_group("cache_behavior/eviction_pressure");
         group.sample_size(50);
         group.bench_function("lifo", |b| {
-            let pool = BufferPool::new()
+            let pool = ZeroPool::new()
                 .max_buffers_per_class(100)
                 .tls_cache_size(8)
                 .min_buffer_size(4096);
             b.iter(|| {
                 let mut bufs = vec![];
                 for _ in 0..10 {
-                    bufs.push(pool.get(64 * 1024));
+                    bufs.push(pool.alloc(64 * 1024));
                 }
                 for buf in bufs {
                     drop(buf);
@@ -501,7 +501,7 @@ fn cache_behavior(c: &mut Criterion) {
                 BenchmarkId::new("threads", num_threads),
                 &num_threads,
                 |b, &num_threads| {
-                    let pool = BufferPool::new().tls_cache_size(1).min_buffer_size(0);
+                    let pool = ZeroPool::new().tls_cache_size(1).min_buffer_size(0);
                     b.iter(|| {
                         let pool = &pool;
                         thread::scope(|s| {
@@ -509,7 +509,7 @@ fn cache_behavior(c: &mut Criterion) {
                             for _ in 0..num_threads {
                                 handles.push(s.spawn(|| {
                                     for _ in 0..1000 {
-                                        let buf = pool.get(1024);
+                                        let buf = pool.alloc(1024);
                                         black_box(&buf);
                                         drop(buf);
                                     }
@@ -536,28 +536,28 @@ fn memory_features(c: &mut Criterion) {
         let size = 1024 * 1024;
 
         group.bench_function("unpinned", |b| {
-            let pool = BufferPool::new().pinned_memory(false);
+            let pool = ZeroPool::new().pinned_memory(false);
             b.iter(|| {
-                let mut buf = pool.get(size);
+                let mut buf = pool.alloc(size);
                 black_box(&mut buf);
                 drop(buf);
             });
         });
 
         group.bench_function("pinned", |b| {
-            let pool = BufferPool::new().pinned_memory(true);
+            let pool = ZeroPool::new().pinned_memory(true);
             b.iter(|| {
-                let mut buf = pool.get(size);
+                let mut buf = pool.alloc(size);
                 black_box(&mut buf);
                 drop(buf);
             });
         });
 
         group.bench_function("pinned_preallocated", |b| {
-            let pool = BufferPool::new().pinned_memory(true);
-            pool.preallocate(10, size);
+            let pool = ZeroPool::new().pinned_memory(true);
+            pool.warm(10, size);
             b.iter(|| {
-                let mut buf = pool.get(size);
+                let mut buf = pool.alloc(size);
                 black_box(&mut buf);
                 drop(buf);
             });
@@ -574,14 +574,14 @@ fn memory_features(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", prealloc_count),
                 &prealloc_count,
                 |b, &prealloc_count| {
-                    let pool = BufferPool::new();
+                    let pool = ZeroPool::new();
                     if prealloc_count > 0 {
-                        pool.preallocate(prealloc_count, 64 * 1024);
+                        pool.warm(prealloc_count, 64 * 1024);
                     }
                     b.iter(|| {
                         let mut bufs = vec![];
                         for _ in 0..10 {
-                            bufs.push(pool.get(64 * 1024));
+                            bufs.push(pool.alloc(64 * 1024));
                         }
                         for buf in bufs {
                             black_box(&buf);
@@ -602,11 +602,11 @@ fn memory_features(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", max_buffers),
                 &max_buffers,
                 |b, &max_buffers| {
-                    let pool = BufferPool::new().max_buffers_per_class(max_buffers);
+                    let pool = ZeroPool::new().max_buffers_per_class(max_buffers);
                     b.iter(|| {
                         let mut bufs = vec![];
                         for _ in 0..(max_buffers * 2) {
-                            bufs.push(pool.get(64 * 1024));
+                            bufs.push(pool.alloc(64 * 1024));
                         }
                         for buf in bufs {
                             drop(buf);
@@ -626,7 +626,7 @@ fn memory_features(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", num_classes),
                 &num_classes,
                 |b, &num_classes| {
-                    let pool = BufferPool::new();
+                    let pool = ZeroPool::new();
                     let sizes: Vec<usize> =
                         [4096, 16384, 65536, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864]
                             .iter()
@@ -636,7 +636,7 @@ fn memory_features(c: &mut Criterion) {
                     b.iter(|| {
                         let mut bufs = vec![];
                         for &s in &sizes {
-                            bufs.push(pool.get(s));
+                            bufs.push(pool.alloc(s));
                         }
                         for buf in bufs {
                             black_box(&buf);
@@ -657,10 +657,10 @@ fn memory_features(c: &mut Criterion) {
                 BenchmarkId::new("zeropool", min_size),
                 &min_size,
                 |b, &min_size| {
-                    let pool = BufferPool::new().min_buffer_size(min_size);
+                    let pool = ZeroPool::new().min_buffer_size(min_size);
                     b.iter(|| {
-                        let small_buf = pool.get(512);
-                        let large_buf = pool.get(128 * 1024);
+                        let small_buf = pool.alloc(512);
+                        let large_buf = pool.alloc(128 * 1024);
                         black_box(&small_buf);
                         black_box(&large_buf);
                         drop(small_buf);
