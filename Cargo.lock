@@ -304,12 +304,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "lifeguard"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89be94dbd775db37b46ca4f4bf5cf89adfb13ba197bfbcb69b2122848ee73c26"
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,6 +377,15 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "opool"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd40b720b302b5aa0c78879e2ee393cda363b8cbca87ab59539c9a64146afaa"
+dependencies = [
+ "crossbeam-queue",
+]
 
 [[package]]
 name = "parking_lot"
@@ -918,8 +921,8 @@ dependencies = [
  "criterion",
  "crossbeam-queue",
  "deadpool",
- "lifeguard",
  "object-pool",
+ "opool",
  "region",
  "sharded-slab",
  "tokio",

@@ -3,6 +3,7 @@
 //! Run all:           `cargo bench`
 //! Run targeted:      `cargo bench -- single_thread`
 //!                    `cargo bench -- multi_thread`
+//!                    `cargo bench -- realistic`
 //!                    `cargo bench -- allocation_patterns`
 //!                    `cargo bench -- cache_behavior`
 //!                    `cargo bench -- memory_features`
@@ -14,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use zeropool::ZeroPool;
 
-// ── Single-thread comparisons ──────────────────────────────────────────
+// ── Single-thread hot-path ─────────────────────────────────────────────
 
 fn single_thread(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_thread");
@@ -48,22 +49,28 @@ fn single_thread(c: &mut Criterion) {
             });
         });
 
-        group.bench_with_input(BenchmarkId::new("lifeguard", size), &size, |b, &size| {
-            use lifeguard::Pool;
-            let pool: Pool<Vec<u8>> = Pool::with_size(10);
-            b.iter(|| {
-                let mut buf = pool.new();
-                buf.reserve(size);
-                black_box(&mut buf);
-            });
-        });
-
         group.bench_with_input(BenchmarkId::new("object_pool", size), &size, |b, &size| {
             use object_pool::Pool;
             let pool: Pool<Vec<u8>> = Pool::new(10, || Vec::with_capacity(size));
             b.iter(|| {
                 let mut buf = pool.pull(|| Vec::with_capacity(size));
                 black_box(&mut buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("opool", size), &size, |b, &size| {
+            use opool::{Pool, PoolAllocator};
+            struct VecAlloc(usize);
+            impl PoolAllocator<Vec<u8>> for VecAlloc {
+                fn allocate(&self) -> Vec<u8> {
+                    Vec::with_capacity(self.0)
+                }
+                fn reset(&self, _obj: &mut Vec<u8>) {}
+            }
+            let pool = Pool::new(64, VecAlloc(size));
+            b.iter(|| {
+                let mut buf = pool.get();
+                black_box(&mut *buf);
             });
         });
 
@@ -78,7 +85,264 @@ fn single_thread(c: &mut Criterion) {
     group.finish();
 }
 
-// ── Multi-thread scaling ───────────────────────────────────────────────
+// ── Realistic: alloc + write + drop ────────────────────────────────────
+//
+// The critical difference vs the hot-path benchmark: we WRITE to each
+// buffer, forcing page faults on cold allocations.  Recycled buffers
+// already have their pages mapped → this is where pooling pays off.
+
+fn realistic(c: &mut Criterion) {
+    // ── Single-threaded write workload ─────────────────────────────
+    {
+        let mut group = c.benchmark_group("realistic/write_single");
+
+        for size in [4096, 65536, 1024 * 1024] {
+            group.throughput(Throughput::Bytes(size as u64));
+
+            group.bench_with_input(BenchmarkId::new("zeropool", size), &size, |b, &size| {
+                let pool = ZeroPool::new();
+                // Warm the pool so all iterations reuse mapped pages.
+                let warmup = pool.alloc(size);
+                drop(warmup);
+                b.iter(|| {
+                    let mut buf = pool.alloc(size);
+                    // Write every 4KB page to force faults on cold allocs.
+                    for i in (0..buf.len()).step_by(4096) {
+                        buf[i] = 0xAB;
+                    }
+                    black_box(&buf);
+                    drop(buf);
+                });
+            });
+
+            group.bench_with_input(BenchmarkId::new("no_pool", size), &size, |b, &size| {
+                b.iter(|| {
+                    let mut buf = vec![0u8; size];
+                    for i in (0..buf.len()).step_by(4096) {
+                        buf[i] = 0xAB;
+                    }
+                    black_box(&buf);
+                });
+            });
+
+            group.bench_with_input(BenchmarkId::new("object_pool", size), &size, |b, &size| {
+                use object_pool::Pool;
+                let pool: Pool<Vec<u8>> = Pool::new(10, || vec![0u8; size]);
+                b.iter(|| {
+                    let mut buf = pool.pull(|| vec![0u8; size]);
+                    for i in (0..size).step_by(4096) {
+                        buf[i] = 0xAB;
+                    }
+                    black_box(&*buf);
+                });
+            });
+
+            group.bench_with_input(BenchmarkId::new("opool", size), &size, |b, &size| {
+                use opool::{Pool, PoolAllocator};
+                struct VecAlloc(usize);
+                impl PoolAllocator<Vec<u8>> for VecAlloc {
+                    fn allocate(&self) -> Vec<u8> {
+                        vec![0u8; self.0]
+                    }
+                    fn reset(&self, _obj: &mut Vec<u8>) {}
+                }
+                let pool = Pool::new(64, VecAlloc(size));
+                b.iter(|| {
+                    let mut buf = pool.get();
+                    for i in (0..buf.len().min(size)).step_by(4096) {
+                        buf[i] = 0xAB;
+                    }
+                    black_box(&*buf);
+                });
+            });
+        }
+
+        group.finish();
+    }
+
+    // ── Multi-threaded write workload ──────────────────────────────
+    {
+        let mut group = c.benchmark_group("realistic/write_multi");
+        group.sample_size(50);
+        let size = 64 * 1024;
+        let iters_per_thread = 500;
+
+        for num_threads in [2, 4, 8] {
+            group.throughput(Throughput::Bytes((size * num_threads * iters_per_thread) as u64));
+
+            group.bench_with_input(
+                BenchmarkId::new("zeropool", num_threads),
+                &num_threads,
+                |b, &num_threads| {
+                    let pool = ZeroPool::new();
+                    b.iter(|| {
+                        thread::scope(|s| {
+                            for _ in 0..num_threads {
+                                let pool = &pool;
+                                s.spawn(move || {
+                                    for _ in 0..iters_per_thread {
+                                        let mut buf = pool.alloc(size);
+                                        for i in (0..buf.len()).step_by(4096) {
+                                            buf[i] = 0xAB;
+                                        }
+                                        black_box(&buf);
+                                        drop(buf);
+                                    }
+                                });
+                            }
+                        });
+                    });
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("no_pool", num_threads),
+                &num_threads,
+                |b, &num_threads| {
+                    b.iter(|| {
+                        thread::scope(|s| {
+                            for _ in 0..num_threads {
+                                s.spawn(|| {
+                                    for _ in 0..iters_per_thread {
+                                        let mut buf = vec![0u8; size];
+                                        for i in (0..buf.len()).step_by(4096) {
+                                            buf[i] = 0xAB;
+                                        }
+                                        black_box(&buf);
+                                    }
+                                });
+                            }
+                        });
+                    });
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("object_pool", num_threads),
+                &num_threads,
+                |b, &num_threads| {
+                    use object_pool::Pool;
+                    let pool: Arc<Pool<Vec<u8>>> =
+                        Arc::new(Pool::new(num_threads * 4, || vec![0u8; size]));
+                    b.iter(|| {
+                        thread::scope(|s| {
+                            for _ in 0..num_threads {
+                                let pool = &pool;
+                                s.spawn(move || {
+                                    for _ in 0..iters_per_thread {
+                                        let mut buf = pool.pull(|| vec![0u8; size]);
+                                        for i in (0..size).step_by(4096) {
+                                            buf[i] = 0xAB;
+                                        }
+                                        black_box(&*buf);
+                                    }
+                                });
+                            }
+                        });
+                    });
+                },
+            );
+        }
+
+        group.finish();
+    }
+
+    // ── Burst: allocate N buffers, use them, return all ────────────
+    {
+        let mut group = c.benchmark_group("realistic/burst");
+        group.sample_size(50);
+
+        for burst_size in [10, 50, 100] {
+            let buf_size = 64 * 1024;
+
+            group.bench_with_input(
+                BenchmarkId::new("zeropool", burst_size),
+                &burst_size,
+                |b, &burst_size| {
+                    let pool = ZeroPool::new();
+                    b.iter(|| {
+                        let mut bufs: Vec<_> = (0..burst_size)
+                            .map(|_| {
+                                let mut buf = pool.alloc(buf_size);
+                                buf[0] = 0xFF;
+                                buf
+                            })
+                            .collect();
+                        black_box(&mut bufs);
+                        drop(bufs);
+                    });
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("no_pool", burst_size),
+                &burst_size,
+                |b, &burst_size| {
+                    b.iter(|| {
+                        let mut bufs: Vec<_> = (0..burst_size)
+                            .map(|_| {
+                                let mut buf = vec![0u8; buf_size];
+                                buf[0] = 0xFF;
+                                buf
+                            })
+                            .collect();
+                        black_box(&mut bufs);
+                        drop(bufs);
+                    });
+                },
+            );
+        }
+
+        group.finish();
+    }
+
+    // ── Mixed sizes: varied allocation sizes per iteration ─────────
+    {
+        let mut group = c.benchmark_group("realistic/mixed_sizes");
+
+        let sizes = [1024, 4096, 16384, 65536, 262_144, 1_048_576];
+
+        group.bench_function("zeropool", |b| {
+            let pool = ZeroPool::new();
+            b.iter(|| {
+                for &s in &sizes {
+                    let mut buf = pool.alloc(s);
+                    buf[0] = 0xAB;
+                    black_box(&buf);
+                    drop(buf);
+                }
+            });
+        });
+
+        group.bench_function("no_pool", |b| {
+            b.iter(|| {
+                for &s in &sizes {
+                    let mut buf = vec![0u8; s];
+                    buf[0] = 0xAB;
+                    black_box(&buf);
+                }
+            });
+        });
+
+        group.bench_function("object_pool", |b| {
+            // object_pool only supports one size — use separate pools
+            use object_pool::Pool;
+            let pools: Vec<Pool<Vec<u8>>> =
+                sizes.iter().map(|&s| Pool::new(10, move || vec![0u8; s])).collect();
+            b.iter(|| {
+                for (i, &s) in sizes.iter().enumerate() {
+                    let mut buf = pools[i].pull(|| vec![0u8; s]);
+                    buf[0] = 0xAB;
+                    black_box(&*buf);
+                }
+            });
+        });
+
+        group.finish();
+    }
+}
+
+// ── Multi-thread scaling (hot path, no writes) ────────────────────────
 
 fn multi_thread(c: &mut Criterion) {
     const ITERATIONS_PER_THREAD: usize = 1000;
@@ -92,37 +356,21 @@ fn multi_thread(c: &mut Criterion) {
             BenchmarkId::new("zeropool", num_threads),
             &num_threads,
             |b, &num_threads| {
-                use std::sync::Barrier;
-                let pool = Arc::new(ZeroPool::new());
-                let barrier_start = Arc::new(Barrier::new(num_threads + 1));
-                let barrier_end = Arc::new(Barrier::new(num_threads + 1));
-
-                let handles: Vec<_> = (0..num_threads)
-                    .map(|_| {
-                        let pool = Arc::clone(&pool);
-                        let barrier_start = Arc::clone(&barrier_start);
-                        let barrier_end = Arc::clone(&barrier_end);
-
-                        thread::spawn(move || {
-                            loop {
-                                barrier_start.wait();
+                let pool = ZeroPool::new();
+                b.iter(|| {
+                    thread::scope(|s| {
+                        for _ in 0..num_threads {
+                            let pool = &pool;
+                            s.spawn(move || {
                                 for _ in 0..ITERATIONS_PER_THREAD {
                                     let mut buf = pool.alloc(size);
                                     black_box(&mut buf);
                                     drop(buf);
                                 }
-                                barrier_end.wait();
-                            }
-                        })
-                    })
-                    .collect();
-
-                b.iter(|| {
-                    barrier_start.wait();
-                    barrier_end.wait();
+                            });
+                        }
+                    });
                 });
-
-                drop(handles);
             },
         );
 
@@ -130,34 +378,18 @@ fn multi_thread(c: &mut Criterion) {
             BenchmarkId::new("no_pool", num_threads),
             &num_threads,
             |b, &num_threads| {
-                use std::sync::Barrier;
-                let barrier_start = Arc::new(Barrier::new(num_threads + 1));
-                let barrier_end = Arc::new(Barrier::new(num_threads + 1));
-
-                let handles: Vec<_> = (0..num_threads)
-                    .map(|_| {
-                        let barrier_start = Arc::clone(&barrier_start);
-                        let barrier_end = Arc::clone(&barrier_end);
-
-                        thread::spawn(move || {
-                            loop {
-                                barrier_start.wait();
+                b.iter(|| {
+                    thread::scope(|s| {
+                        for _ in 0..num_threads {
+                            s.spawn(|| {
                                 for _ in 0..ITERATIONS_PER_THREAD {
                                     let mut buf = Vec::<u8>::with_capacity(size);
                                     black_box(&mut buf);
                                 }
-                                barrier_end.wait();
-                            }
-                        })
-                    })
-                    .collect();
-
-                b.iter(|| {
-                    barrier_start.wait();
-                    barrier_end.wait();
+                            });
+                        }
+                    });
                 });
-
-                drop(handles);
             },
         );
 
@@ -166,37 +398,21 @@ fn multi_thread(c: &mut Criterion) {
             &num_threads,
             |b, &num_threads| {
                 use sharded_slab::Slab;
-                use std::sync::Barrier;
                 let slab: Arc<Slab<Vec<u8>>> = Arc::new(Slab::new());
-                let barrier_start = Arc::new(Barrier::new(num_threads + 1));
-                let barrier_end = Arc::new(Barrier::new(num_threads + 1));
-
-                let handles: Vec<_> = (0..num_threads)
-                    .map(|_| {
-                        let slab = Arc::clone(&slab);
-                        let barrier_start = Arc::clone(&barrier_start);
-                        let barrier_end = Arc::clone(&barrier_end);
-
-                        thread::spawn(move || {
-                            loop {
-                                barrier_start.wait();
+                b.iter(|| {
+                    thread::scope(|s| {
+                        for _ in 0..num_threads {
+                            let slab = &slab;
+                            s.spawn(move || {
                                 for _ in 0..ITERATIONS_PER_THREAD {
                                     let key = slab.insert(Vec::with_capacity(size)).unwrap();
                                     black_box(slab.get(key));
                                     slab.remove(key);
                                 }
-                                barrier_end.wait();
-                            }
-                        })
-                    })
-                    .collect();
-
-                b.iter(|| {
-                    barrier_start.wait();
-                    barrier_end.wait();
+                            });
+                        }
+                    });
                 });
-
-                drop(handles);
             },
         );
 
@@ -205,37 +421,50 @@ fn multi_thread(c: &mut Criterion) {
             &num_threads,
             |b, &num_threads| {
                 use object_pool::Pool;
-                use std::sync::Barrier;
                 let pool: Arc<Pool<Vec<u8>>> =
                     Arc::new(Pool::new(num_threads * 2, || Vec::with_capacity(size)));
-                let barrier_start = Arc::new(Barrier::new(num_threads + 1));
-                let barrier_end = Arc::new(Barrier::new(num_threads + 1));
-
-                let handles: Vec<_> = (0..num_threads)
-                    .map(|_| {
-                        let pool = Arc::clone(&pool);
-                        let barrier_start = Arc::clone(&barrier_start);
-                        let barrier_end = Arc::clone(&barrier_end);
-
-                        thread::spawn(move || {
-                            loop {
-                                barrier_start.wait();
+                b.iter(|| {
+                    thread::scope(|s| {
+                        for _ in 0..num_threads {
+                            let pool = &pool;
+                            s.spawn(move || {
                                 for _ in 0..ITERATIONS_PER_THREAD {
                                     let mut buf = pool.pull(|| Vec::with_capacity(size));
                                     black_box(&mut buf);
                                 }
-                                barrier_end.wait();
-                            }
-                        })
-                    })
-                    .collect();
-
-                b.iter(|| {
-                    barrier_start.wait();
-                    barrier_end.wait();
+                            });
+                        }
+                    });
                 });
+            },
+        );
 
-                drop(handles);
+        group.bench_with_input(
+            BenchmarkId::new("opool", num_threads),
+            &num_threads,
+            |b, &num_threads| {
+                use opool::{Pool, PoolAllocator};
+                struct VecAlloc;
+                impl PoolAllocator<Vec<u8>> for VecAlloc {
+                    fn allocate(&self) -> Vec<u8> {
+                        Vec::with_capacity(64 * 1024)
+                    }
+                    fn reset(&self, _obj: &mut Vec<u8>) {}
+                }
+                let pool = Arc::new(Pool::new(128, VecAlloc));
+                b.iter(|| {
+                    thread::scope(|s| {
+                        for _ in 0..num_threads {
+                            let pool = &pool;
+                            s.spawn(move || {
+                                for _ in 0..ITERATIONS_PER_THREAD {
+                                    let mut buf = pool.get();
+                                    black_box(&mut *buf);
+                                }
+                            });
+                        }
+                    });
+                });
             },
         );
     }
@@ -677,6 +906,7 @@ criterion_group!(
     benches,
     single_thread,
     multi_thread,
+    realistic,
     allocation_patterns,
     cache_behavior,
     memory_features,
