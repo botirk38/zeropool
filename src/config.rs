@@ -126,7 +126,7 @@ impl Builder {
     ///
     /// Panics if `tls_cache_size` is 0 or `max_buffers_per_class` is 0.
     pub fn build(self) -> crate::BufferPool {
-        let num_cpus = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
+        let num_cpus = thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
         let tls_cache_size = self
             .tls_cache_size
