@@ -8,15 +8,14 @@ fn main() {
     println!("Created pool with default configuration");
     println!("Pool has {} buffers", pool.len());
 
-    // Custom configuration with builder
-    let custom_pool = BufferPool::builder()
+    // Custom configuration
+    let custom_pool = BufferPool::new()
         .tls_cache_size(8)
         .max_buffers_per_class(32)
         .min_buffer_size(4096)
-        .batch_size(4)
-        .build();
+        .batch_size(4);
 
-    println!("\nCreated custom pool with builder");
+    println!("\nCreated custom pool");
     println!("Pool has {} buffers", custom_pool.len());
 
     // Test buffer operations

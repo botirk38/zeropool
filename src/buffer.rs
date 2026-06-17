@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_pooled_buffer_auto_return() {
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
         let cap = {
             let buffer = pool.get(4096);
             buffer.capacity()
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_pooled_buffer_explicit_drop() {
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
         let cap = {
             let buffer = pool.get(4096);
             let cap = buffer.capacity();

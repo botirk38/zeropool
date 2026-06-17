@@ -78,6 +78,12 @@ impl ClassTable {
         buf
     }
 
+    /// Access the underlying size class array.
+    #[inline]
+    pub fn classes(&self) -> &[SizeClass] {
+        &self.classes
+    }
+
     /// Total buffered count across all classes (approximate).
     pub fn total_buffered(&self) -> usize {
         self.classes.iter().map(SizeClass::len).sum()

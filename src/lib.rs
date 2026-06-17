@@ -31,12 +31,11 @@
 //! ```rust
 //! use zeropool::BufferPool;
 //!
-//! let pool = BufferPool::builder()
+//! let pool = BufferPool::new()
 //!     .min_buffer_size(4096)           // Pool buffers ≥ 4KB
 //!     .tls_cache_size(8)               // 8 buffers per class per thread
 //!     .max_buffers_per_class(64)       // 64 buffers per class in shared pool
-//!     .batch_size(4)                   // Transfer 4 at a time (magazine)
-//!     .build();
+//!     .batch_size(4);                  // Transfer 4 at a time (magazine)
 //! ```
 //!
 //! # Architecture
@@ -81,12 +80,13 @@
 
 mod buffer;
 mod config;
+mod metrics;
 mod pool;
 mod size_class;
 mod tls;
 
 pub use buffer::PooledBuffer;
-pub use config::Builder;
+pub use metrics::{ClassInfo, PoolStats};
 pub use pool::BufferPool;
 
 #[cfg(test)]
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_basic_pool_operations() {
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
         let buf = pool.get(1024);
         assert_eq!(buf.len(), 1024);
         drop(buf);
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_buffer_sizing() {
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
         let buf = pool.get(2048);
         assert_eq!(buf.len(), 2048);
         drop(buf);
@@ -120,10 +120,7 @@ mod tests {
     fn test_min_size_filtering() {
         use std::thread;
 
-        let pool = BufferPool::builder()
-            .min_buffer_size(1024 * 1024)
-            .max_buffers_per_class(16)
-            .build();
+        let pool = BufferPool::new().min_buffer_size(1024 * 1024).max_buffers_per_class(16);
 
         let tls_cache_size = pool.state.tls_cache_size;
         let pool_clone = pool.clone();
@@ -161,11 +158,7 @@ mod tests {
 
     #[test]
     fn test_max_pool_size() {
-        let pool = BufferPool::builder()
-            .min_buffer_size(0)
-            .max_buffers_per_class(4)
-            .tls_cache_size(2)
-            .build();
+        let pool = BufferPool::new().min_buffer_size(0).max_buffers_per_class(4).tls_cache_size(2);
 
         // Fill and return many buffers of the same size class
         let mut buffers = Vec::new();
@@ -182,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_thread_local_cache() {
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
         let cache_size = pool.state.tls_cache_size;
 
         // First N get/put operations should use TLS
@@ -202,16 +195,15 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_api() {
-        let pool1 = BufferPool::builder().build();
+    fn test_config_api() {
+        let pool1 = BufferPool::new();
         assert!(!pool1.is_empty() || pool1.is_empty());
 
-        let pool2 = BufferPool::builder()
+        let pool2 = BufferPool::new()
             .min_buffer_size(4096)
             .tls_cache_size(4)
             .max_buffers_per_class(16)
-            .batch_size(2)
-            .build();
+            .batch_size(2);
 
         assert_eq!(pool2.state.min_buffer_size, 4096);
         assert_eq!(pool2.state.tls_cache_size, 4);
@@ -225,7 +217,7 @@ mod tests {
     fn test_concurrent_access() {
         use std::thread;
 
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
         let mut handles = vec![];
 
         for _ in 0..8 {
@@ -248,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_clone_shares_state() {
-        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
+        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2);
 
         let buf1 = pool.get(4096);
         let buf2 = pool.get(4096);
@@ -270,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_preallocate() {
-        let pool = BufferPool::builder().min_buffer_size(0).build();
+        let pool = BufferPool::new().min_buffer_size(0);
 
         let initial_len = pool.len();
 
@@ -286,7 +278,7 @@ mod tests {
     fn test_edge_cases() {
         use std::thread;
 
-        let pool = BufferPool::builder().tls_cache_size(2).min_buffer_size(0).build();
+        let pool = BufferPool::new().tls_cache_size(2).min_buffer_size(0);
 
         assert!(pool.is_empty());
 
@@ -315,7 +307,7 @@ mod tests {
     fn test_size_class_routing() {
         use std::thread;
 
-        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
+        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2);
 
         let mut handles = vec![];
         for _ in 0..4 {
@@ -346,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).build();
+        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2);
 
         let mut buffers = vec![];
         for _ in 0..10 {
@@ -371,8 +363,8 @@ mod tests {
     #[test]
     fn test_pool_isolation() {
         // Two pools should not share TLS caches
-        let pool1 = BufferPool::builder().min_buffer_size(0).build();
-        let pool2 = BufferPool::builder().min_buffer_size(0).build();
+        let pool1 = BufferPool::new().min_buffer_size(0);
+        let pool2 = BufferPool::new().min_buffer_size(0);
 
         assert_ne!(pool1.state.id, pool2.state.id);
 
@@ -386,7 +378,7 @@ mod tests {
     #[test]
     fn test_batch_transfer() {
         // Verify magazine-style batch works by overflowing TLS
-        let pool = BufferPool::builder().min_buffer_size(0).tls_cache_size(2).batch_size(2).build();
+        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(2).batch_size(2);
 
         // Fill and return more buffers than TLS holds
         let mut buffers = Vec::new();
@@ -399,6 +391,90 @@ mod tests {
 
         // Some should have spilled to shared pool
         assert!(!pool.is_empty());
+    }
+
+    #[test]
+    fn test_stats_counters() {
+        let pool = BufferPool::new().min_buffer_size(0);
+
+        let s = pool.stats();
+        assert_eq!(s.gets, 0);
+        assert_eq!(s.puts, 0);
+
+        let buf = pool.get(4096);
+        let s = pool.stats();
+        assert_eq!(s.gets, 1);
+        assert_eq!(s.allocations, 1);
+
+        drop(buf);
+        let s = pool.stats();
+        assert_eq!(s.puts, 1);
+    }
+
+    #[test]
+    fn test_stats_hit_rates() {
+        let pool = BufferPool::new().min_buffer_size(0).tls_cache_size(4);
+
+        // First get → allocation (cold)
+        let buf = pool.get(4096);
+        drop(buf);
+
+        // Second get → TLS hit (warm)
+        let buf = pool.get(4096);
+        drop(buf);
+
+        let s = pool.stats();
+        assert_eq!(s.gets, 2);
+        assert!(s.tls_hits >= 1);
+        assert!(s.hit_rate > 0.0);
+    }
+
+    #[test]
+    fn test_stats_oversize() {
+        let pool = BufferPool::new().min_buffer_size(0);
+
+        let buf = pool.get(128 * 1024 * 1024);
+        let s = pool.stats();
+        assert_eq!(s.oversize, 1);
+
+        drop(buf);
+        let s = pool.stats();
+        assert_eq!(s.discards, 1);
+    }
+
+    #[test]
+    fn test_stats_reset() {
+        let pool = BufferPool::new().min_buffer_size(0);
+
+        let buf = pool.get(4096);
+        drop(buf);
+        assert!(pool.stats().gets > 0);
+
+        pool.reset_stats();
+        let s = pool.stats();
+        assert_eq!(s.gets, 0);
+        assert_eq!(s.puts, 0);
+    }
+
+    #[test]
+    fn test_stats_display() {
+        let pool = BufferPool::new().min_buffer_size(0);
+        let buf = pool.get(4096);
+        drop(buf);
+
+        let output = format!("{}", pool.stats());
+        assert!(output.contains("gets: 1"));
+        assert!(output.contains("puts: 1"));
+    }
+
+    #[test]
+    fn test_stats_class_info() {
+        let pool = BufferPool::new().min_buffer_size(0);
+        pool.preallocate(4, 4096);
+
+        let s = pool.stats();
+        assert_eq!(s.classes.len(), 8);
+        assert!(s.classes.iter().any(|c| c.buffered >= 4));
     }
 
     // Boundary routing tests are in size_class.rs::tests

@@ -61,7 +61,7 @@ Thread 1            Thread 2            Thread N
          └────────────────┘
 ```
 
-**Fast path**: TLS cache pop (lock-free, ~8–30ns)
+**Fast path**: TLS cache pop (lock-free, ~24ns)
 **Medium path**: Magazine-style batch refill from shared pool (CAS-based)
 **Cold path**: Fresh allocation via `SizeClass::allocate`
 
@@ -70,12 +70,11 @@ Thread 1            Thread 2            Thread N
 ```rust
 use zeropool::BufferPool;
 
-let pool = BufferPool::builder()
+let pool = BufferPool::new()
     .tls_cache_size(8)               // Buffers per class per thread
     .max_buffers_per_class(64)       // Max pooled per class in shared pool
     .min_buffer_size(4096)           // Pool buffers ≥ 4KB
-    .batch_size(4)                   // Magazine transfer size
-    .build();
+    .batch_size(4);                  // Magazine transfer size
 ```
 
 **Defaults** (auto-configured based on CPU count):
@@ -91,9 +90,7 @@ Lock buffer memory in RAM to prevent swapping (performance optimization):
 ```rust
 use zeropool::BufferPool;
 
-let pool = BufferPool::builder()
-    .pinned_memory(true)
-    .build();
+let pool = BufferPool::new().pinned_memory(true);
 ```
 
 Useful for high-performance computing or real-time systems. May require elevated privileges on some systems. Falls back gracefully if pinning fails.
@@ -103,13 +100,46 @@ Useful for high-performance computing or real-time systems. May require elevated
 Warm up the pool before high-throughput operations:
 
 ```rust
-let pool = BufferPool::builder().min_buffer_size(0).build();
+let pool = BufferPool::new().min_buffer_size(0);
 pool.preallocate(16, 64 * 1024); // 16 × 64KB buffers
 ```
 
+## Statistics
+
+`pool.stats()` returns a point-in-time snapshot of pool performance:
+
+```rust
+use zeropool::BufferPool;
+
+let pool = BufferPool::new().min_buffer_size(0);
+
+let buf = pool.get(4096);
+drop(buf);
+
+let s = pool.stats();
+println!("gets: {}, hits: {}, hit_rate: {:.0}%", s.gets, s.tls_hits + s.shared_hits, s.hit_rate * 100.0);
+
+// Human-readable summary
+println!("{s}");
+// gets: 1 | puts: 1 | hit_rate: 0.0%
+//   tls_hits: 0 (0.0%) | shared_hits: 0 | allocations: 1 | discards: 0 | oversize: 0
+
+// Per-class buffer counts
+for ci in &s.classes {
+    if ci.buffered > 0 {
+        println!("  {} bytes: {} buffered", ci.boundary, ci.buffered);
+    }
+}
+
+// Reset counters
+pool.reset_stats();
+```
+
+Metrics use `Relaxed` atomics — zero impact on the hot path.
+
 ## Thread Safety
 
-`BufferPool` is `Clone` and thread-safe (`Arc<Inner>` internally):
+`BufferPool` is `Clone` and thread-safe (`Arc<PoolState>` internally):
 
 ```rust
 let pool = BufferPool::new();
@@ -141,6 +171,26 @@ let buffer = pool.get(1024);
 let vec: Vec<u8> = buffer.into_inner();
 ```
 
+## Benchmarks
+
+Single-threaded hot path (TLS hit, 2-core VM):
+
+| Buffer Size | Latency |
+|------------|---------|
+| 1KB | ~24 ns |
+| 4KB | ~24 ns |
+| 16KB | ~24 ns |
+| 64KB | ~25 ns |
+| 1MB | ~25 ns |
+
+Run benchmarks:
+```bash
+cargo bench                           # all benchmarks
+cargo bench -- single_thread          # hot path only
+cargo bench -- multi_thread           # contention tests
+cargo bench -- cache_behavior         # TLS cache behavior
+```
+
 ## Use Cases
 
 - **Data processing**: ETL pipelines, log processing, analytics
@@ -160,13 +210,7 @@ let vec: Vec<u8> = buffer.into_inner();
 | Batch transfer | Magazine-style | No | No | No |
 | Auto-configured | CPU-aware | Manual | Manual | Manual |
 | Pool isolation | Unique IDs | N/A | No | N/A |
-
-## Performance
-
-Run benchmarks:
-```bash
-cargo bench
-```
+| Statistics | `pool.stats()` | No | No | No |
 
 ## License
 

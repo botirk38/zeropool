@@ -5,7 +5,7 @@ use std::thread;
 use zeropool::BufferPool;
 
 fn main() {
-    let pool = BufferPool::builder().min_buffer_size(0).build();
+    let pool = BufferPool::new().min_buffer_size(0);
 
     let handles: Vec<_> = (0..4)
         .map(|_| {
