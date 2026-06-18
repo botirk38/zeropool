@@ -134,33 +134,31 @@ mod tests {
         let pool = ZeroPool::new().min_buffer_size(1024 * 1024).max_buffers_per_class(16);
 
         let tls_cache_size = pool.state.tls_cache_size;
-        let pool_clone = pool.clone();
 
-        thread::spawn(move || {
-            for _ in 0..tls_cache_size {
-                let buf = pool_clone.alloc(512);
-                drop(buf);
-            }
-            let small_buf = pool_clone.alloc(512);
-            drop(small_buf);
-        })
-        .join()
-        .unwrap();
+        thread::scope(|s| {
+            s.spawn(|| {
+                for _ in 0..tls_cache_size {
+                    let buf = pool.alloc(512);
+                    drop(buf);
+                }
+                let small_buf = pool.alloc(512);
+                drop(small_buf);
+            });
+        });
 
         assert_eq!(pool.len(), 0);
 
-        let pool_clone = pool.clone();
-        thread::spawn(move || {
-            let mut buffers = Vec::new();
-            for _ in 0..=tls_cache_size {
-                buffers.push(pool_clone.alloc(2 * 1024 * 1024));
-            }
-            for buf in buffers {
-                drop(buf);
-            }
-        })
-        .join()
-        .unwrap();
+        thread::scope(|s| {
+            s.spawn(|| {
+                let mut buffers = Vec::new();
+                for _ in 0..=tls_cache_size {
+                    buffers.push(pool.alloc(2 * 1024 * 1024));
+                }
+                for buf in buffers {
+                    drop(buf);
+                }
+            });
+        });
 
         assert!(!pool.is_empty());
     }
@@ -222,45 +220,20 @@ mod tests {
         use std::thread;
 
         let pool = ZeroPool::new().min_buffer_size(0);
-        let mut handles = vec![];
 
-        for _ in 0..8 {
-            let pool = pool.clone();
-            handles.push(thread::spawn(move || {
-                for _ in 0..100 {
-                    let buf = pool.alloc(4096);
-                    assert_eq!(buf.len(), 4096);
-                    drop(buf);
-                }
-            }));
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
+        thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    for _ in 0..100 {
+                        let buf = pool.alloc(4096);
+                        assert_eq!(buf.len(), 4096);
+                        drop(buf);
+                    }
+                });
+            }
+        });
 
         assert!(pool.len() < 1000);
-    }
-
-    #[test]
-    fn test_clone_shares_state() {
-        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2);
-
-        let buf1 = pool.alloc(4096);
-        let buf2 = pool.alloc(4096);
-        drop(buf1);
-        drop(buf2);
-
-        let pool_clone = pool.clone();
-
-        let buf3 = pool_clone.alloc(4096);
-        let buf4 = pool_clone.alloc(4096);
-        let buf5 = pool_clone.alloc(4096);
-        drop(buf3);
-        drop(buf4);
-        drop(buf5);
-
-        assert!(std::sync::Arc::ptr_eq(&pool.state, &pool_clone.state));
     }
 
     #[test]
@@ -289,19 +262,18 @@ mod tests {
         assert_eq!(buf_zero.len(), 0);
         drop(buf_zero);
 
-        let pool_clone = pool.clone();
-        thread::spawn(move || {
-            let b1 = pool_clone.alloc(4096);
-            let b2 = pool_clone.alloc(4096);
-            drop(b1);
-            drop(b2);
+        thread::scope(|s| {
+            s.spawn(|| {
+                let b1 = pool.alloc(4096);
+                let b2 = pool.alloc(4096);
+                drop(b1);
+                drop(b2);
 
-            let buf_large = pool_clone.alloc(100 * 1024 * 1024);
-            assert_eq!(buf_large.len(), 100 * 1024 * 1024);
-            drop(buf_large);
-        })
-        .join()
-        .unwrap();
+                let buf_large = pool.alloc(100 * 1024 * 1024);
+                assert_eq!(buf_large.len(), 100 * 1024 * 1024);
+                drop(buf_large);
+            });
+        });
     }
 
     #[test]
@@ -310,25 +282,21 @@ mod tests {
 
         let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2);
 
-        let mut handles = vec![];
-        for _ in 0..4 {
-            let pool_clone = pool.clone();
-            handles.push(thread::spawn(move || {
-                let mut buffers = vec![];
-                for &size in &[4096, 16384, 65536, 262_144] {
-                    for _ in 0..4 {
-                        buffers.push(pool_clone.alloc(size));
+        thread::scope(|s| {
+            for _ in 0..4 {
+                s.spawn(|| {
+                    let mut buffers = vec![];
+                    for &size in &[4096, 16384, 65536, 262_144] {
+                        for _ in 0..4 {
+                            buffers.push(pool.alloc(size));
+                        }
                     }
-                }
-                for buf in buffers {
-                    drop(buf);
-                }
-            }));
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
+                    for buf in buffers {
+                        drop(buf);
+                    }
+                });
+            }
+        });
 
         assert!(!pool.is_empty());
     }

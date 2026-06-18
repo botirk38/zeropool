@@ -7,19 +7,14 @@ use zeropool::ZeroPool;
 fn main() {
     let pool = ZeroPool::new().min_buffer_size(0);
 
-    let handles: Vec<_> = (0..4)
-        .map(|_| {
-            let p = pool.clone();
-            thread::spawn(move || {
+    thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
                 for _ in 0..500_000 {
-                    let buf = p.alloc(black_box(65536));
+                    let buf = pool.alloc(black_box(65536));
                     drop(black_box(buf));
                 }
-            })
-        })
-        .collect();
-
-    for h in handles {
-        h.join().unwrap();
-    }
+            });
+        }
+    });
 }

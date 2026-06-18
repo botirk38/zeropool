@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::allocator::{Allocator, HeapAllocator};
@@ -54,9 +53,9 @@ pub(crate) struct State {
 ///          │ [64MB queue]   │
 ///          └────────────────┘
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ZeroPool {
-    pub(crate) state: Arc<State>,
+    pub(crate) state: State,
 }
 
 impl ZeroPool {
@@ -85,7 +84,7 @@ impl ZeroPool {
         let cpus = cpu_count();
         let tls = default_tls_cache_size(cpus);
         Self {
-            state: Arc::new(State {
+            state: State {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 table: ClassTable::new(default_max_buffers_per_class(cpus)),
                 tls_cache_size: tls,
@@ -94,7 +93,7 @@ impl ZeroPool {
                 batch_size: default_batch_size(tls),
                 counters: Counters::new(),
                 allocator: Box::new(HeapAllocator),
-            }),
+            },
         }
     }
 
@@ -166,9 +165,7 @@ impl ZeroPool {
     }
 
     fn rebuild(mut self, f: impl FnOnce(&mut State)) -> Self {
-        let state = Arc::get_mut(&mut self.state)
-            .expect("cannot reconfigure a shared pool — call config methods before cloning");
-        f(state);
+        f(&mut self.state);
         self
     }
 
@@ -193,7 +190,7 @@ impl ZeroPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn alloc(&self, size: usize) -> crate::Buf {
+    pub fn alloc(&self, size: usize) -> crate::Buf<'_> {
         self.state.counters.gets.fetch_add(1, Ordering::Relaxed);
 
         let Some((class_idx, class)) = self.state.table.route(size) else {
@@ -201,7 +198,7 @@ impl ZeroPool {
             self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
             let mut buf = self.allocate_raw(size, size);
             self.pin(&mut buf);
-            return crate::Buf::new(buf, self.clone(), u8::MAX);
+            return crate::Buf::new(buf, self, u8::MAX);
         };
 
         // ── TLS fast path (lock-free) ──────────────────────────────
@@ -226,14 +223,14 @@ impl ZeroPool {
                 self.state.counters.shared_hits.fetch_add(1, Ordering::Relaxed);
             }
             SizeClass::resize(&mut buf, size);
-            return crate::Buf::new(buf, self.clone(), ci);
+            return crate::Buf::new(buf, self, ci);
         }
 
         // ── Cold path: fresh allocation ────────────────────────────
         self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
         let mut buf = self.allocate_raw(class.class_size, size);
         self.pin(&mut buf);
-        crate::Buf::new(buf, self.clone(), ci)
+        crate::Buf::new(buf, self, ci)
     }
 
     /// Return a buffer to the pool for reuse.

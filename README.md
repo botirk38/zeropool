@@ -121,7 +121,27 @@ println!("{s}");
 
 ## Thread safety
 
-`ZeroPool` is `Clone + Send + Sync`. Each clone shares the pool; each thread gets its own TLS cache.
+`ZeroPool` is `Send + Sync`. Share it across threads via `&pool` (scoped threads) or `Arc<ZeroPool>`:
+
+```rust
+use std::sync::Arc;
+use std::thread;
+use zeropool::ZeroPool;
+
+// Scoped threads — borrow directly
+let pool = ZeroPool::new();
+thread::scope(|s| {
+    s.spawn(|| { let buf = pool.alloc(4096); });
+    s.spawn(|| { let buf = pool.alloc(4096); });
+});
+
+// Owned threads — wrap in Arc
+let pool = Arc::new(ZeroPool::new());
+let p = Arc::clone(&pool);
+thread::spawn(move || { let buf = p.alloc(4096); });
+```
+
+Each thread gets its own TLS cache automatically. `Buf<'_>` is lifetime-bound to the pool — use `buf.into_vec()` when you need an owned `Vec<u8>`.
 
 ## License
 

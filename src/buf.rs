@@ -27,11 +27,9 @@ use crate::ZeroPool;
 ///     // automatically deallocated back to pool here
 /// }
 /// ```
-pub struct Buf {
+pub struct Buf<'a> {
     buffer: Option<Vec<u8>>,
-    pool: ZeroPool,
-    /// Pre-computed class index from alloc(), avoids recomputation in dealloc().
-    /// `u8::MAX` means oversize (not pooled).
+    pool: &'a ZeroPool,
     class_idx: u8,
 }
 
@@ -39,7 +37,7 @@ pub struct Buf {
 //
 // `buffer` is `Some` for the entire public lifetime of `Buf`.
 // `into_inner()` consumes `self`; `Drop` is the only path to `None`.
-impl Buf {
+impl Buf<'_> {
     #[inline(always)]
     fn vec(&self) -> &Vec<u8> {
         // SAFETY: buffer is always Some during public lifetime.
@@ -53,8 +51,8 @@ impl Buf {
     }
 }
 
-impl Buf {
-    pub(crate) fn new(buffer: Vec<u8>, pool: ZeroPool, class_idx: u8) -> Self {
+impl<'a> Buf<'a> {
+    pub(crate) fn new(buffer: Vec<u8>, pool: &'a ZeroPool, class_idx: u8) -> Self {
         Self { buffer: Some(buffer), pool, class_idx }
     }
 
@@ -116,7 +114,7 @@ impl Buf {
 
 // ── Deref to [u8], not Vec<u8> ─────────────────────────────────────────
 
-impl Deref for Buf {
+impl Deref for Buf<'_> {
     type Target = [u8];
 
     #[inline]
@@ -125,14 +123,14 @@ impl Deref for Buf {
     }
 }
 
-impl DerefMut for Buf {
+impl DerefMut for Buf<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
         self.vec_mut()
     }
 }
 
-impl Drop for Buf {
+impl Drop for Buf<'_> {
     #[inline(always)]
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
@@ -141,7 +139,7 @@ impl Drop for Buf {
     }
 }
 
-impl fmt::Debug for Buf {
+impl fmt::Debug for Buf<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Buf")
             .field("len", &self.len())
@@ -150,27 +148,27 @@ impl fmt::Debug for Buf {
     }
 }
 
-impl AsRef<[u8]> for Buf {
+impl AsRef<[u8]> for Buf<'_> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.vec()
     }
 }
 
-impl AsMut<[u8]> for Buf {
+impl AsMut<[u8]> for Buf<'_> {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.vec_mut()
     }
 }
 
-impl From<Buf> for Vec<u8> {
-    fn from(buf: Buf) -> Self {
+impl From<Buf<'_>> for Vec<u8> {
+    fn from(buf: Buf<'_>) -> Self {
         buf.into_inner()
     }
 }
 
-impl io::Write for Buf {
+impl io::Write for Buf<'_> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         io::Write::write(self.vec_mut(), buf)
@@ -184,44 +182,6 @@ impl io::Write for Buf {
     #[inline]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
-    }
-}
-
-// ── tokio-uring support ────────────────────────────────────────────────
-
-#[cfg(all(target_os = "linux", feature = "tokio-uring"))]
-mod tokio_uring_support {
-    use super::Buf;
-    use tokio_uring::buf::{IoBuf, IoBufMut};
-
-    // SAFETY: Buf wraps a Vec<u8> whose backing storage is stable
-    // for the entire lifetime of the struct. The Option is always Some
-    // during public use; only Drop and into_inner set it to None.
-    unsafe impl IoBuf for Buf {
-        fn stable_ptr(&self) -> *const u8 {
-            self.vec().as_ptr()
-        }
-
-        fn bytes_init(&self) -> usize {
-            self.vec().len()
-        }
-
-        fn bytes_total(&self) -> usize {
-            self.vec().capacity()
-        }
-    }
-
-    // SAFETY: Same stability guarantee as IoBuf. set_init is only called
-    // by tokio-uring after it has written exactly `pos` bytes.
-    unsafe impl IoBufMut for Buf {
-        fn stable_mut_ptr(&mut self) -> *mut u8 {
-            self.vec_mut().as_mut_ptr()
-        }
-
-        unsafe fn set_init(&mut self, pos: usize) {
-            // SAFETY: tokio-uring guarantees pos bytes are initialized.
-            unsafe { self.vec_mut().set_len(pos) };
-        }
     }
 }
 
@@ -337,17 +297,5 @@ mod tests {
         let mut buf = pool.alloc(0);
         buf.write_all(b"hello").unwrap();
         assert_eq!(&*buf, b"hello");
-    }
-
-    #[cfg(all(target_os = "linux", feature = "tokio-uring"))]
-    #[test]
-    fn test_tokio_uring_traits() {
-        use tokio_uring::buf::{IoBuf, IoBufMut};
-
-        let pool = ZeroPool::new();
-        let mut buf = pool.alloc(1024);
-        assert_eq!(buf.bytes_total(), buf.capacity());
-        let ptr = buf.stable_mut_ptr();
-        assert!(!ptr.is_null());
     }
 }
