@@ -60,6 +60,7 @@ inline_always = "allow"            # Used deliberately for hot paths
 cast_possible_truncation = "allow" # Intentional in shard indexing
 cast_precision_loss = "allow"      # Acceptable for metrics/stats
 cast_sign_loss = "allow"           # Safe in context
+uninit_vec = "allow"               # set_len on u8 vecs — all bit patterns valid
 
 # Code organization
 module_name_repetitions = "allow" # pool::Pool is idiomatic
@@ -84,21 +85,23 @@ option_if_let_else = "allow" # Sometimes more readable
 crossbeam-queue = "0.3"
 region = "3.0"
 
+# Comparison crates — only compiled with `--features bench`
+sharded-slab = { version = "0.1", optional = true }
+bytes = { version = "1.5", optional = true }
+object-pool = { version = "0.6", optional = true }
+opool = { version = "0.2.0", optional = true }
+
 # Optional tokio-uring support
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-uring = { version = "0.5", optional = true }
 
 [dev-dependencies]
 criterion = "0.7"
-sharded-slab = "0.1"
-bytes = "1.5"
-lifeguard = "0.6"
-deadpool = "0.12"
 tokio = { version = "1", features = ["rt", "macros"] }
-object-pool = "0.6"
 
 [features]
 default = []
+bench = ["dep:sharded-slab", "dep:bytes", "dep:object-pool", "dep:opool"]
 tokio-uring = ["dep:tokio-uring"]
 
 [[bench]]

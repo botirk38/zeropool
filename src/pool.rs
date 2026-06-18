@@ -372,7 +372,6 @@ impl ZeroPool {
         let mut buf = self.state.allocator.allocate(capacity);
         // SAFETY: allocator guarantees capacity >= `capacity` >= `len`.
         // All u8 bit patterns are valid.
-        #[allow(clippy::uninit_vec)]
         unsafe {
             buf.set_len(len);
         }
