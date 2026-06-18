@@ -40,9 +40,20 @@ Common pattern in servers: grab a batch of buffers, process, release.
 
 | Size | ZeroPool | `Vec` | Speedup |
 |------|----------|-------|---------|
-| 4 KB | 36 ns    | 105 ns   | **2.9×** |
-| 64 KB | 75 ns   | 803 ns   | **10.7×** |
-| 1 MB | 1.9 µs   | 19.7 µs  | **10.2×** |
+| 4 KB | 40 ns    | 125 ns   | **3.1×** |
+| 64 KB | 73 ns   | 812 ns   | **11×** |
+| 1 MB | 1.9 µs   | 17.5 µs  | **9×** |
+
+### vs other pool crates
+
+| Crate | 64 KB (ST) | 8 threads | Handles any size? |
+|-------|-----------|-----------|-------------------|
+| **ZeroPool** | 73 ns | 615 µs | **yes** — one pool, all sizes |
+| opool | 57 ns | — | no — one type per pool |
+| object_pool | 65 ns | 570 µs | no — one type per pool |
+| `Vec` (no pool) | 812 ns | 3,500 µs | n/a |
+
+Single-type pools are slightly faster in microbenchmarks because they skip size-class routing. In practice, ZeroPool replaces N separate pools with one — simpler code, same order of magnitude.
 
 ```bash
 cargo bench                     # zeropool-only
