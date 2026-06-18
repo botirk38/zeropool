@@ -14,11 +14,3 @@ pub fn touch_pages(buf: &mut [u8]) {
     }
     black_box(buf);
 }
-
-/// Touch each buffer in a slice.
-#[inline]
-pub fn touch_each(bufs: &mut [Vec<u8>]) {
-    for buf in bufs.iter_mut() {
-        touch_pages(buf);
-    }
-}

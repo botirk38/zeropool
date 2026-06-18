@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use common::sizes::{BURST_SIZES, MIXED_SIZES, SCALE_THREAD_COUNTS, SIZES, THREAD_COUNTS, ZIPF_SIZES};
+use common::sizes::{
+    BURST_SIZES, MIXED_SIZES, SCALE_THREAD_COUNTS, SIZES, THREAD_COUNTS, ZIPF_SIZES,
+};
 use common::touch::touch_pages;
 
 use zeropool::ZeroPool;
@@ -222,22 +224,26 @@ fn realistic(c: &mut Criterion) {
                     },
                 );
 
-                group.bench_with_input(BenchmarkId::new("opool", threads), &threads, |b, &threads| {
-                    let pool = common::competitors::opool_capacity(threads * 4, size);
-                    b.iter(|| {
-                        thread::scope(|s| {
-                            for _ in 0..threads {
-                                let pool = &pool;
-                                s.spawn(move || {
-                                    for _ in 0..ops {
-                                        let mut buf = pool.get();
-                                        touch_pages(&mut buf);
-                                    }
-                                });
-                            }
+                group.bench_with_input(
+                    BenchmarkId::new("opool", threads),
+                    &threads,
+                    |b, &threads| {
+                        let pool = common::competitors::opool_capacity(threads * 4, size);
+                        b.iter(|| {
+                            thread::scope(|s| {
+                                for _ in 0..threads {
+                                    let pool = &pool;
+                                    s.spawn(move || {
+                                        for _ in 0..ops {
+                                            let mut buf = pool.get();
+                                            touch_pages(&mut buf);
+                                        }
+                                    });
+                                }
+                            });
                         });
-                    });
-                });
+                    },
+                );
             }
         }
 
@@ -263,46 +269,38 @@ fn scale_sustained(c: &mut Criterion) {
     for &threads in SCALE_THREAD_COUNTS {
         group.throughput(Throughput::Bytes((size * threads * ops_per_thread) as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("zeropool", threads),
-            &threads,
-            |b, &threads| {
-                let pool = common::competitors::zeropool_no_min();
-                b.iter(|| {
-                    thread::scope(|s| {
-                        for _ in 0..threads {
-                            let pool = &pool;
-                            s.spawn(move || {
-                                for _ in 0..ops_per_thread {
-                                    let mut buf = pool.alloc(size);
-                                    touch_pages(&mut buf);
-                                    drop(buf);
-                                }
-                            });
-                        }
-                    });
+        group.bench_with_input(BenchmarkId::new("zeropool", threads), &threads, |b, &threads| {
+            let pool = common::competitors::zeropool_no_min();
+            b.iter(|| {
+                thread::scope(|s| {
+                    for _ in 0..threads {
+                        let pool = &pool;
+                        s.spawn(move || {
+                            for _ in 0..ops_per_thread {
+                                let mut buf = pool.alloc(size);
+                                touch_pages(&mut buf);
+                                drop(buf);
+                            }
+                        });
+                    }
                 });
-            },
-        );
+            });
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("vec_alloc", threads),
-            &threads,
-            |b, &threads| {
-                b.iter(|| {
-                    thread::scope(|s| {
-                        for _ in 0..threads {
-                            s.spawn(|| {
-                                for _ in 0..ops_per_thread {
-                                    let mut buf = vec![0u8; size];
-                                    touch_pages(&mut buf);
-                                }
-                            });
-                        }
-                    });
+        group.bench_with_input(BenchmarkId::new("vec_alloc", threads), &threads, |b, &threads| {
+            b.iter(|| {
+                thread::scope(|s| {
+                    for _ in 0..threads {
+                        s.spawn(|| {
+                            for _ in 0..ops_per_thread {
+                                let mut buf = vec![0u8; size];
+                                touch_pages(&mut buf);
+                            }
+                        });
+                    }
                 });
-            },
-        );
+            });
+        });
 
         #[cfg(feature = "bench")]
         group.bench_with_input(
