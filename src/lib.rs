@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_basic_operations() {
-        let pool = ZeroPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
         let buf = pool.alloc(1024);
         assert_eq!(buf.len(), 1024);
         drop(buf);
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_buffer_sizing() {
-        let pool = ZeroPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
         let buf = pool.alloc(2048);
         assert_eq!(buf.len(), 2048);
         drop(buf);
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_stats_counters() {
-        let pool = ZeroPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
 
         let s = pool.stats();
         assert_eq!(s.gets, 0);
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_stats_hit_rates() {
-        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(4);
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(4).track_stats(true);
 
         let buf = pool.alloc(4096);
         drop(buf);
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_stats_oversize() {
-        let pool = ZeroPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
 
         let buf = pool.alloc(128 * 1024 * 1024);
         let s = pool.stats();
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_stats_reset() {
-        let pool = ZeroPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
 
         let buf = pool.alloc(4096);
         drop(buf);
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_stats_display() {
-        let pool = ZeroPool::new().min_buffer_size(0);
+        let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
         let buf = pool.alloc(4096);
         drop(buf);
 

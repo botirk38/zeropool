@@ -14,51 +14,79 @@ ZeroPool recycles buffers so the kernel work happens once.
 
 ## Benchmarks
 
-Every benchmark writes to every page of the buffer. This is realistic — it's what networking, serialization, and file I/O actually do. Raw alloc/drop microbenchmarks hide the page-fault cost that dominates real workloads.
+Every "realistic" benchmark writes to every page of the buffer. This is what networking, serialization, and file I/O actually do. Pure alloc/drop microbenchmarks hide the page-fault cost that dominates real workloads.
 
-### Multi-threaded (64 KB buffers, 500 ops/thread)
+Full transparent numbers and reproducibility steps live in [`BENCHMARKS.md`](./BENCHMARKS.md).
 
-| Threads | ZeroPool | `Vec` | Speedup |
-|---------|----------|-------|---------|
-| 2       | 151 µs   | 899 µs   | **6×** |
-| 4       | 258 µs   | 1,808 µs | **7×** |
-| 8       | 579 µs   | 3,481 µs | **6×** |
+### Headline: realistic 64 KiB write, 200 ops/thread
 
-Contention-free: each thread has its own TLS cache. No locks on the hot path.
+| Threads | ZeroPool | `Vec` | `opool` | `object_pool` |
+|---------|---------:|------:|--------:|--------------:|
+| 2       |  35 µs   | 272 µs | 40 µs  |  45 µs |
+| 4       |  54 µs   | 299 µs | 84 µs  | 102 µs |
+| 8       |  89 µs   | 388 µs | 199 µs | 295 µs |
+| 16      | 157 µs   | 624 µs | 371 µs | 1,476 µs |
 
-### Burst allocation (allocate N × 64 KB, write, drop all)
+ZeroPool is `2.2×`–`9.4×` faster than `object_pool` and within `1.1×`–`2.4×` of `opool` as contention grows. Compared to raw `Vec`, ZeroPool is `4.0×`–`7.7×` faster across the same range.
 
-| N   | ZeroPool | `Vec` | Speedup |
-|-----|----------|-------|---------|
-| 10  | 448 ns   | 10.9 µs  | **24×** |
-| 50  | 3.1 µs   | 61.5 µs  | **20×** |
-| 100 | 7.7 µs   | 124.9 µs | **16×** |
+### Sustained: 10 000 ops/thread, 64 KiB write, 8 s measurement
 
-Common pattern in servers: grab a batch of buffers, process, release.
+| Threads | ZeroPool | `Vec` | `object_pool` |
+|---------:|---------:|------:|--------------:|
+| 1  |  558 µs | 10.79 ms |  527 µs |
+| 4  |  656 µs | 11.51 ms | 5.27 ms |
+| 8  |  677 µs | 13.29 ms | 22.81 ms |
+| 16 | 1.01 ms | 18.11 ms | 118.3 ms |
+| 32 | 2.35 ms | 39.67 ms | 286.1 ms |
 
-### Single-threaded (alloc → write every page → drop)
+`object_pool` collapses past 4 threads because its `Mutex`-guarded shared queue serializes all producers. ZeroPool's lock-free `ArrayQueue` + per-thread cache scales linearly up to 16 threads on this 20-thread box.
 
-| Size | ZeroPool | `Vec` | Speedup |
-|------|----------|-------|---------|
-| 4 KB | 40 ns    | 125 ns   | **3.1×** |
-| 64 KB | 73 ns   | 812 ns   | **11×** |
-| 1 MB | 1.9 µs   | 17.5 µs  | **9×** |
+### Mixed sizes: one pool handles many buffer sizes
 
-### vs other pool crates
+| Crate | Pools needed | 7 sizes, round-robin | Zipf-like 1 KiB–256 KiB |
+|---|--:|---:|---:|
+| **ZeroPool** | 1 | **144 ns** | **1.95 µs** |
+| `object_pool` (one per size) | 7 | 140 ns | 2.08 µs |
+| `opool` (one per size) | 7 | 107 ns | — |
+| `Vec` (no pool) | 0 | 96 µs | 2.47 µs |
 
-| Crate | 64 KB (ST) | 8 threads | Handles any size? |
-|-------|-----------|-----------|-------------------|
-| **ZeroPool** | 73 ns | 615 µs | **yes** — one pool, all sizes |
-| opool | 57 ns | — | no — one type per pool |
-| object_pool | 65 ns | 570 µs | no — one type per pool |
-| `Vec` (no pool) | 812 ns | 3,500 µs | n/a |
+ZeroPool is the same order of magnitude as N typed pools while managing a single object — and **660× faster than raw `Vec` on the round-robin case**.
 
-Single-type pools are slightly faster in microbenchmarks because they skip size-class routing. In practice, ZeroPool replaces N separate pools with one — simpler code, same order of magnitude.
+### Single-thread hot path (no page writes)
+
+| 64 KiB | Time |
+|---|---:|
+| `opool` | 15.2 ns |
+| **ZeroPool** | 20.2 ns |
+| `object_pool` | 21.1 ns |
+| `bytes::BytesMut` | 45.8 ns |
+| `Vec::with_capacity` | 44.5 ns |
+
+`opool` is still the single-thread microbenchmark winner. ZeroPool is within 5 ns of it and is now within `1 ns` of `object_pool`. Stats tracking adds ~10 ns — opt in only when you need it (see [`stats_overhead`](#stats)).
+
+### Burst: allocate N × 64 KiB, write, drop all
+
+| N    | ZeroPool | `Vec` | `opool` | `object_pool` |
+|-----:|---------:|------:|--------:|--------------:|
+| 10   | 327 ns  | 11.1 µs | 214 ns | 250 ns |
+| 50   | 2.14 µs | 58.4 µs | 1.07 µs | 1.25 µs |
+| 100  | 5.58 µs | 127 µs  | 2.09 µs | 2.39 µs |
+| 1000 | 92.9 µs | 6.85 ms | 21.6 µs | 24.7 µs |
+
+Burst is where raw `Vec` falls furthest behind. For server workloads that grab a batch of buffers, ZeroPool is `~74×` faster than `Vec` at `N=1000`.
+
+### Reproduce
 
 ```bash
-cargo bench                     # zeropool-only
-cargo bench --features bench    # full comparison suite (includes opool, object_pool, sharded_slab, bytes)
+cargo bench                     # ZeroPool-only timing
+cargo bench --features bench    # full comparison suite
 cargo bench -- realistic        # just the write workloads
+cargo bench -- hot_path         # pure alloc/drop microbenchmarks
+cargo bench -- scale            # sustained throughput
+cargo bench -- mixed            # mixed-size workloads
+cargo bench -- burst            # burst allocation
+cargo bench -- contention       # TLS depth × thread count
+cargo bench -- stats            # stats overhead
 ```
 
 ## Usage
@@ -77,7 +105,7 @@ buf[0] = 42;                            // Deref<Target = [u8]>
 
 8 power-of-two size classes (4 KB → 64 MB). Each thread keeps a local cache per class; on miss, a batch is moved from the lock-free shared queue (`crossbeam::ArrayQueue`). Pool IDs prevent TLS cross-contamination.
 
-**Hot path** (~35 ns): TLS pop — no locks, no atomics.
+**Hot path** (~20 ns): TLS pop — no locks, no atomics by default.
 
 ## Configuration
 
@@ -87,6 +115,7 @@ let pool = ZeroPool::new()
     .max_buffers_per_class(64)   // shared pool capacity per class
     .min_buffer_size(4096)       // skip pooling for small buffers
     .batch_size(4)               // TLS ↔ shared transfer size
+    .track_stats(true)           // opt into atomic counters
     .pinned_memory(true);        // mlock buffers (no swap)
 ```
 
@@ -111,13 +140,14 @@ let pool = ZeroPool::new().allocator(HugePageAllocator);
 ## Stats
 
 ```rust
+let pool = ZeroPool::new().track_stats(true);
 let s = pool.stats();
 println!("{s}");
 // gets: 1 | puts: 1 | hit_rate: 0.0%
 //   tls_hits: 0 (0.0%) | shared_hits: 0 | allocations: 1 | discards: 0 | oversize: 0
 ```
 
-`Relaxed` atomics — zero overhead on the hot path.
+Stats are disabled by default because even `Relaxed` atomics are measurable in tight allocation loops. Enable them with `.track_stats(true)` when you need counters.
 
 ## Thread safety
 
