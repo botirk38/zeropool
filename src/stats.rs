@@ -1,4 +1,4 @@
-//! Allocator performance metrics with zero-cost atomic counters.
+//! Allocator performance metrics with opt-in atomic counters.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,7 +63,7 @@ impl Counters {
 /// ```
 /// use zeropool::ZeroPool;
 ///
-/// let pool = ZeroPool::new().min_buffer_size(0);
+/// let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
 ///
 /// let buf = pool.alloc(4096);
 /// drop(buf);

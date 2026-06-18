@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::allocator::{Allocator, HeapAllocator};
@@ -21,6 +20,7 @@ pub(crate) struct State {
     pub min_buffer_size: usize,
     pub pinned_memory: bool,
     pub batch_size: usize,
+    pub track_stats: bool,
     pub counters: Counters,
     pub allocator: Box<dyn Allocator>,
 }
@@ -54,9 +54,9 @@ pub(crate) struct State {
 ///          │ [64MB queue]   │
 ///          └────────────────┘
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ZeroPool {
-    pub(crate) state: Arc<State>,
+    pub(crate) state: State,
 }
 
 impl ZeroPool {
@@ -75,7 +75,8 @@ impl ZeroPool {
     ///     .min_buffer_size(4096)
     ///     .tls_cache_size(8)
     ///     .max_buffers_per_class(64)
-    ///     .batch_size(4);
+    ///     .batch_size(4)
+    ///     .track_stats(true);
     /// ```
     pub fn new() -> Self {
         use crate::config::{
@@ -85,16 +86,17 @@ impl ZeroPool {
         let cpus = cpu_count();
         let tls = default_tls_cache_size(cpus);
         Self {
-            state: Arc::new(State {
+            state: State {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 table: ClassTable::new(default_max_buffers_per_class(cpus)),
                 tls_cache_size: tls,
                 min_buffer_size: DEFAULT_MIN_BUFFER_SIZE,
                 pinned_memory: false,
                 batch_size: default_batch_size(tls),
+                track_stats: false,
                 counters: Counters::new(),
                 allocator: Box::new(HeapAllocator),
-            }),
+            },
         }
     }
 
@@ -165,10 +167,17 @@ impl ZeroPool {
         self.rebuild(|s| s.batch_size = size)
     }
 
+    /// Enable or disable runtime statistics tracking.
+    ///
+    /// Disabled by default because hot-path atomic counters are measurable
+    /// overhead in tight allocation loops. Enable this when you need
+    /// [`stats()`](Self::stats) to report allocation counters.
+    pub fn track_stats(self, enabled: bool) -> Self {
+        self.rebuild(|s| s.track_stats = enabled)
+    }
+
     fn rebuild(mut self, f: impl FnOnce(&mut State)) -> Self {
-        let state = Arc::get_mut(&mut self.state)
-            .expect("cannot reconfigure a shared pool — call config methods before cloning");
-        f(state);
+        f(&mut self.state);
         self
     }
 
@@ -193,15 +202,19 @@ impl ZeroPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn alloc(&self, size: usize) -> crate::Buf {
-        self.state.counters.gets.fetch_add(1, Ordering::Relaxed);
+    pub fn alloc(&self, size: usize) -> crate::Buf<'_> {
+        if self.state.track_stats {
+            self.state.counters.gets.fetch_add(1, Ordering::Relaxed);
+        }
 
         let Some((class_idx, class)) = self.state.table.route(size) else {
-            self.state.counters.oversize.fetch_add(1, Ordering::Relaxed);
-            self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
+            if self.state.track_stats {
+                self.state.counters.oversize.fetch_add(1, Ordering::Relaxed);
+                self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
+            }
             let mut buf = self.allocate_raw(size, size);
             self.pin(&mut buf);
-            return crate::Buf::new(buf, self.clone(), u8::MAX);
+            return crate::Buf::new(buf, self, u8::MAX);
         };
 
         // ── TLS fast path (lock-free) ──────────────────────────────
@@ -221,19 +234,23 @@ impl ZeroPool {
 
         if let Some((mut buf, from_tls)) = tls_result {
             if from_tls {
-                self.state.counters.tls_hits.fetch_add(1, Ordering::Relaxed);
-            } else {
+                if self.state.track_stats {
+                    self.state.counters.tls_hits.fetch_add(1, Ordering::Relaxed);
+                }
+            } else if self.state.track_stats {
                 self.state.counters.shared_hits.fetch_add(1, Ordering::Relaxed);
             }
             SizeClass::resize(&mut buf, size);
-            return crate::Buf::new(buf, self.clone(), ci);
+            return crate::Buf::new(buf, self, ci);
         }
 
         // ── Cold path: fresh allocation ────────────────────────────
-        self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
+        if self.state.track_stats {
+            self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
+        }
         let mut buf = self.allocate_raw(class.class_size, size);
         self.pin(&mut buf);
-        crate::Buf::new(buf, self.clone(), ci)
+        crate::Buf::new(buf, self, ci)
     }
 
     /// Return a buffer to the pool for reuse.
@@ -242,18 +259,24 @@ impl ZeroPool {
     /// at allocation time (`u8::MAX` for oversize buffers that bypass pooling).
     #[inline(always)]
     pub(crate) fn dealloc(&self, mut buffer: Vec<u8>, class_hint: u8) {
-        self.state.counters.puts.fetch_add(1, Ordering::Relaxed);
+        if self.state.track_stats {
+            self.state.counters.puts.fetch_add(1, Ordering::Relaxed);
+        }
         buffer.clear();
 
         if class_hint == u8::MAX {
-            self.state.counters.discards.fetch_add(1, Ordering::Relaxed);
+            if self.state.track_stats {
+                self.state.counters.discards.fetch_add(1, Ordering::Relaxed);
+            }
             return;
         }
 
         let cap = buffer.capacity();
 
         if cap < self.state.min_buffer_size {
-            self.state.counters.discards.fetch_add(1, Ordering::Relaxed);
+            if self.state.track_stats {
+                self.state.counters.discards.fetch_add(1, Ordering::Relaxed);
+            }
             return;
         }
 
@@ -299,7 +322,7 @@ impl ZeroPool {
     /// ```
     /// use zeropool::ZeroPool;
     ///
-    /// let pool = ZeroPool::new().min_buffer_size(0);
+    /// let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
     /// pool.warm(16, 64 * 1024); // 16 × 64KB buffers
     /// ```
     pub fn warm(&self, count: usize, size: usize) {
@@ -347,7 +370,7 @@ impl ZeroPool {
     /// ```
     /// use zeropool::ZeroPool;
     ///
-    /// let pool = ZeroPool::new().min_buffer_size(0);
+    /// let pool = ZeroPool::new().min_buffer_size(0).track_stats(true);
     /// let buf = pool.alloc(4096);
     /// drop(buf);
     ///

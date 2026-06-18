@@ -1,6 +1,6 @@
 [package]
 name = "zeropool"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["Botir Khaltaev"]
 description = "A user-space byte allocator with size-class bucketing, lock-free shared pool, and thread-local caching"
@@ -91,18 +91,12 @@ bytes = { version = "1.5", optional = true }
 object-pool = { version = "0.6", optional = true }
 opool = { version = "0.2.0", optional = true }
 
-# Optional tokio-uring support
-[target.'cfg(target_os = "linux")'.dependencies]
-tokio-uring = { version = "0.5", optional = true }
-
 [dev-dependencies]
 criterion = "0.7"
-tokio = { version = "1", features = ["rt", "macros"] }
 
 [features]
 default = []
 bench = ["dep:sharded-slab", "dep:bytes", "dep:object-pool", "dep:opool"]
-tokio-uring = ["dep:tokio-uring"]
 
 [[bench]]
 name = "pool"
