@@ -135,8 +135,6 @@ Every "realistic" benchmark writes to every page of the buffer, paying the page-
 
 ### Realistic 64 KiB write, 200 ops/thread
 
-![Realistic 64 KiB write benchmark chart](./docs/assets/realistic-write-mt.svg)
-
 | Threads | ZeroPool | `Vec` | `opool` | `object_pool` |
 |---------|---------:|------:|--------:|--------------:|
 | 2       |  35 us   | 272 us | 40 us  |  45 us |
@@ -147,8 +145,6 @@ Every "realistic" benchmark writes to every page of the buffer, paying the page-
 ZeroPool is **4x-8x faster** than raw `Vec` and scales linearly while `object_pool` collapses under contention.
 
 ### Single-thread hot path (no page writes, 64 KiB)
-
-![Single-thread hot path benchmark chart](./docs/assets/hot-path.svg)
 
 | Crate | Time |
 |---|---:|
@@ -166,8 +162,6 @@ Full methodology, sustained throughput, burst allocation, mixed-size, and conten
 cargo bench                     # ZeroPool-only timing
 cargo bench --features bench    # full comparison suite
 cargo bench -- realistic        # just the write workloads
-cd scripts && uv run python bench.py --current --charts
-cd scripts && uv run python bench.py --filter realistic_write_mt --charts
 ```
 
 ## How It Works
