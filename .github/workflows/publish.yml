@@ -29,4 +29,6 @@ jobs:
 
       - name: Publish to crates.io
         if: ${{ !inputs.dry-run }}
-        run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+        run: cargo publish

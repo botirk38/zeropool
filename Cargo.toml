@@ -1,6 +1,6 @@
 [package]
 name = "zeropool"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["Botir Khaltaev"]
 description = "A user-space byte allocator with size-class bucketing, lock-free shared pool, and thread-local caching"
