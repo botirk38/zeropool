@@ -54,6 +54,15 @@ fn hot_path(c: &mut Criterion) {
             });
         });
 
+        group.bench_with_input(BenchmarkId::new("zeropool_uninit", size), &size, |b, &size| {
+            let pool = common::competitors::zeropool_default();
+            b.iter(|| {
+                let buf = pool.alloc_uninit(size);
+                black_box(&buf);
+                drop(buf);
+            });
+        });
+
         group.bench_with_input(BenchmarkId::new("zeropool_stats", size), &size, |b, &size| {
             let pool = common::competitors::zeropool_with_stats();
             b.iter(|| {

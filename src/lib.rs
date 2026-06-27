@@ -2,6 +2,8 @@
 //!
 //! `ZeroPool` is a high-performance, thread-safe byte allocator that recycles
 //! buffers through size-class bucketing and thread-local caching.
+//! Safe allocations are zero-initialized; use [`ZeroPool::alloc_uninit`] for
+//! full-overwrite workloads that need the fastest path.
 //!
 //! - **Size-class bucketing**: Power-of-two classes (4KB→64MB) for O(1) class selection
 //! - **Lock-free shared pool**: `crossbeam::ArrayQueue` per class — no mutexes
@@ -19,6 +21,16 @@
 //! let mut buf = pool.alloc(1024 * 1024); // 1MB — returned as RAII guard
 //! buf[0] = 42;                            // Deref<Target = [u8]>
 //! // automatically deallocated back to pool on drop
+//! ```
+//!
+//! For full-overwrite workloads, skip zeroing with [`ZeroPool::alloc_uninit`]:
+//!
+//! ```rust
+//! use zeropool::ZeroPool;
+//!
+//! let pool = ZeroPool::new();
+//! let buf = pool.alloc_uninit(5).write_from_slice(b"hello");
+//! assert_eq!(&*buf, b"hello");
 //! ```
 //!
 //! # Custom Configuration
@@ -41,10 +53,7 @@
 //! struct PrefaultAllocator;
 //! impl Allocator for PrefaultAllocator {
 //!     fn allocate(&self, capacity: usize) -> Vec<u8> {
-//!         let mut buf = Vec::with_capacity(capacity);
-//!         buf.resize(capacity, 0); // pre-fault pages
-//!         buf.clear();
-//!         buf
+//!         vec![0; capacity]
 //!     }
 //! }
 //!
@@ -80,7 +89,7 @@ mod stats;
 mod tls;
 
 pub use allocator::{Allocator, HeapAllocator};
-pub use buf::Buf;
+pub use buf::{Buf, BufUninit};
 pub use pool::ZeroPool;
 pub use stats::{ClassInfo, Stats};
 
@@ -277,6 +286,27 @@ mod tests {
     }
 
     #[test]
+    fn test_alloc_returns_zeroed_bytes() {
+        let pool = ZeroPool::new().min_buffer_size(0);
+
+        let buf = pool.alloc(4096);
+        assert!(buf.iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn test_reused_buffer_does_not_expose_previous_contents() {
+        let pool = ZeroPool::new().min_buffer_size(0).tls_cache_size(2);
+
+        {
+            let mut buf = pool.alloc(4096);
+            buf.fill(0xA5);
+        }
+
+        let buf = pool.alloc(4096);
+        assert!(buf.iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
     fn test_size_class_routing() {
         use std::thread;
 
@@ -446,7 +476,7 @@ mod tests {
         struct DoubleCapAllocator;
         impl Allocator for DoubleCapAllocator {
             fn allocate(&self, capacity: usize) -> Vec<u8> {
-                Vec::with_capacity(capacity * 2)
+                vec![0; capacity * 2]
             }
         }
 

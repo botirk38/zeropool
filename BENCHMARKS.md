@@ -23,8 +23,9 @@ your `lscpu`, `rustc --version`, and the exact `cargo bench` command.
 - All **realistic** benchmarks write one byte per 4 KiB page so a fresh
   `Vec` pays the page-fault cost. This matches real I/O, networking, and
   serialization workloads.
-- All **hot_path** benchmarks are pure `alloc` / `drop` with no page
-  writes. They are intentionally optimistic and show lower bounds.
+- All **hot_path** benchmarks are pure allocation / drop with no page writes.
+  `alloc()` measures the safe zero-initialized path; `alloc_uninit()` measures
+  the explicit full-overwrite fast path.
 - Each Criterion group runs at least 30 samples (50+ for write workloads)
   with default warm-up.
 - Comparison crates are pulled in only with `--features bench` so the
@@ -81,7 +82,8 @@ N typed pools, and stays within a few percent of their raw speed.
 
 ## Single-thread hot path
 
-Pure `alloc` + `drop`, no page writes. 64 KiB rows.
+Pure allocation + drop, no page writes. 64 KiB rows. Use `alloc_uninit()` for
+the non-zeroing fast path when callers initialize every byte before reading.
 
 | Crate | Time |
 |---|---:|
