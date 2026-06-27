@@ -110,7 +110,7 @@ impl ZeroPool {
     /// struct MyAllocator;
     /// impl Allocator for MyAllocator {
     ///     fn allocate(&self, capacity: usize) -> Vec<u8> {
-    ///         Vec::with_capacity(capacity)
+    ///         vec![0; capacity]
     ///     }
     /// }
     ///
@@ -181,7 +181,7 @@ impl ZeroPool {
         self
     }
 
-    /// Allocate a buffer of at least `size` bytes.
+    /// Allocate a zero-initialized buffer of at least `size` bytes.
     ///
     /// Returns a [`Buf`](crate::Buf) that automatically deallocates back
     /// to the pool on drop.
@@ -212,7 +212,8 @@ impl ZeroPool {
                 self.state.counters.oversize.fetch_add(1, Ordering::Relaxed);
                 self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
             }
-            let mut buf = self.allocate_raw(size, size);
+            let mut buf = self.state.allocator.allocate(size);
+            buf.truncate(size);
             self.pin(&mut buf);
             return crate::Buf::new(buf, self, u8::MAX);
         };
@@ -240,7 +241,7 @@ impl ZeroPool {
             } else if self.state.track_stats {
                 self.state.counters.shared_hits.fetch_add(1, Ordering::Relaxed);
             }
-            SizeClass::resize(&mut buf, size);
+            SizeClass::resize_zeroed(&mut buf, size);
             return crate::Buf::new(buf, self, ci);
         }
 
@@ -248,9 +249,68 @@ impl ZeroPool {
         if self.state.track_stats {
             self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
         }
-        let mut buf = self.allocate_raw(class.class_size, size);
+        let mut buf = self.state.allocator.allocate(class.class_size);
+        buf.truncate(size);
         self.pin(&mut buf);
         crate::Buf::new(buf, self, ci)
+    }
+
+    /// Allocate a buffer without zeroing its contents.
+    ///
+    /// This is the high-performance allocation path for workloads that fully
+    /// overwrite the buffer before reading it. The returned [`BufUninit`](crate::BufUninit)
+    /// does not expose a readable byte slice in safe code.
+    #[inline]
+    #[must_use]
+    pub fn alloc_uninit(&self, size: usize) -> crate::BufUninit<'_> {
+        if self.state.track_stats {
+            self.state.counters.gets.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let Some((class_idx, class)) = self.state.table.route(size) else {
+            if self.state.track_stats {
+                self.state.counters.oversize.fetch_add(1, Ordering::Relaxed);
+                self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
+            }
+            let mut buf = Vec::with_capacity(size);
+            SizeClass::resize_uninit(&mut buf, size);
+            self.pin(&mut buf);
+            return crate::BufUninit::new(buf, self, u8::MAX);
+        };
+
+        let tls_result = TlsState::with(|tls| {
+            if !tls.owns(self.state.id) {
+                tls.bind(self.state.id, self.state.tls_cache_size);
+            }
+
+            if let Some(buf) = tls.caches[class_idx].pop() {
+                return Some((buf, true));
+            }
+
+            tls.refill(class_idx, class, self.state.batch_size).map(|buf| (buf, false))
+        });
+
+        let ci = class_idx as u8;
+
+        if let Some((mut buf, from_tls)) = tls_result {
+            if from_tls {
+                if self.state.track_stats {
+                    self.state.counters.tls_hits.fetch_add(1, Ordering::Relaxed);
+                }
+            } else if self.state.track_stats {
+                self.state.counters.shared_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            SizeClass::resize_uninit(&mut buf, size);
+            return crate::BufUninit::new(buf, self, ci);
+        }
+
+        if self.state.track_stats {
+            self.state.counters.allocations.fetch_add(1, Ordering::Relaxed);
+        }
+        let mut buf = Vec::with_capacity(class.class_size);
+        SizeClass::resize_uninit(&mut buf, size);
+        self.pin(&mut buf);
+        crate::BufUninit::new(buf, self, ci)
     }
 
     /// Return a buffer to the pool for reuse.
@@ -389,18 +449,6 @@ impl ZeroPool {
         self.state.counters.reset();
     }
 
-    /// Allocate a raw buffer via the configured allocator and set its length.
-    #[cold]
-    fn allocate_raw(&self, capacity: usize, len: usize) -> Vec<u8> {
-        let mut buf = self.state.allocator.allocate(capacity);
-        // SAFETY: allocator guarantees capacity >= `capacity` >= `len`.
-        // All u8 bit patterns are valid.
-        unsafe {
-            buf.set_len(len);
-        }
-        buf
-    }
-
     /// Pin buffer memory to RAM if configured.
     #[inline(always)]
     fn pin(&self, buffer: &mut Vec<u8>) {
@@ -410,10 +458,7 @@ impl ZeroPool {
         if buffer.capacity() == 0 {
             return;
         }
-        // SAFETY: capacity was allocated; all u8 patterns valid.
-        unsafe { buffer.set_len(buffer.capacity()) };
-        let _ = region::lock(buffer.as_ptr(), buffer.len());
-        buffer.clear();
+        let _ = region::lock(buffer.as_ptr(), buffer.capacity());
     }
 }
 

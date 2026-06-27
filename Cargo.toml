@@ -20,14 +20,14 @@ readme = "README.md"
 # Strategy: Deny critical issues, warn on quality/style issues
 
 [lints.rust]
-# Warn on unsafe code usage (we allow it but want visibility)
-unsafe_code = "warn"
+# Unsafe is allowed in this crate when documented and contained.
+unsafe_code = "allow"
 # Enforce documentation for public API
 missing_docs = "warn"
 # Warn on missing debug implementations
 missing_debug_implementations = "warn"
 # Catch unused items
-unused = "warn"
+unused = { level = "warn", priority = -2 }
 
 [lints.clippy]
 # =============================================================================
@@ -38,6 +38,7 @@ correctness = { level = "deny", priority = -1 }
 suspicious = { level = "deny", priority = -1 }
 perf = { level = "deny", priority = -1 }
 undocumented_unsafe_blocks = { level = "deny", priority = -1 }
+missing_safety_doc = { level = "deny", priority = -1 }
 
 # =============================================================================
 # WARN: Code quality, style, and best practices

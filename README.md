@@ -12,12 +12,16 @@ Every `Vec::with_capacity(n)` asks the kernel for memory, and every `drop` gives
 
 ZeroPool keeps a pool of reusable byte buffers organized by size class. Buffers are handed out through thread-local caches backed by a lock-free shared queue, so the hot path is a TLS pop with no locks or atomics. When you're done, the buffer goes back to the pool instead of the OS.
 
+The safe default, `alloc(size)`, returns zero-initialized readable bytes. For full-overwrite workloads, `alloc_uninit(size)` skips zeroing and uses a `BufUninit` type that cannot be read from safe code until initialized.
+
 ## Features
 
 - **Size-class bucketing**: 8 power-of-two classes (4 KB to 64 MB), O(1) class selection
 - **Lock-free shared pool**: [`crossbeam::ArrayQueue`](https://docs.rs/crossbeam-queue) per class, no mutexes
 - **Thread-local caching**: per-class LIFO caches with magazine-style batch transfer
 - **Pool isolation**: unique pool IDs prevent TLS cache cross-contamination
+- **Safe by default**: `alloc()` zeroes visible bytes so recycled contents are not exposed
+- **Explicit fast path**: `alloc_uninit()` avoids zeroing for callers that fully overwrite
 - **Pluggable allocator**: custom buffer creation via the [`Allocator`](https://docs.rs/zeropool/latest/zeropool/trait.Allocator.html) trait
 - **Pinned memory**: optional `mlock` to keep buffers out of swap
 - **Opt-in stats**: atomic counters for hit rates, allocations, and discards (disabled by default)
@@ -37,9 +41,20 @@ use zeropool::ZeroPool;
 
 let pool = ZeroPool::new();
 
-let mut buf = pool.alloc(1024 * 1024); // 1 MB, RAII guard
+let mut buf = pool.alloc(1024 * 1024); // 1 MB, zero-initialized RAII guard
 buf[0] = 42;                            // Deref<Target = [u8]>
 // returned to pool on drop
+```
+
+For the fastest path, initialize through `BufUninit` and convert after all bytes are written:
+
+```rust
+use zeropool::ZeroPool;
+
+let pool = ZeroPool::new();
+let buf = pool.alloc_uninit(5).write_from_slice(b"hello");
+
+assert_eq!(&*buf, b"hello");
 ```
 
 ### Sharing across threads
@@ -90,10 +105,7 @@ use zeropool::{Allocator, ZeroPool};
 struct HugePageAllocator;
 impl Allocator for HugePageAllocator {
     fn allocate(&self, capacity: usize) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(capacity);
-        buf.resize(capacity, 0); // pre-fault pages
-        buf.clear();
-        buf
+        vec![0; capacity]
     }
 }
 
@@ -119,7 +131,7 @@ println!("{s}");
 
 ## Performance
 
-Every "realistic" benchmark writes to every page of the buffer, paying the page-fault cost that dominates real workloads (networking, serialization, file I/O). Pure alloc/drop microbenchmarks hide this cost.
+Every "realistic" benchmark writes to every page of the buffer, paying the page-fault cost that dominates real workloads (networking, serialization, file I/O). Pure alloc/drop microbenchmarks hide this cost. Use `alloc_uninit()` for the historical non-zeroing fast path when your workload fully overwrites the buffer.
 
 ### Realistic 64 KiB write, 200 ops/thread
 

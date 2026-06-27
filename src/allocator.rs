@@ -1,15 +1,16 @@
 //! Pluggable buffer allocation backend.
 //!
 //! [`ZeroPool`](crate::ZeroPool) delegates raw buffer creation to an [`Allocator`].
-//! The default [`HeapAllocator`] uses `Vec::with_capacity` (standard heap).
+//! The default [`HeapAllocator`] returns zero-initialized heap buffers.
 //! Implement the trait for custom strategies (page-aligned, huge pages, etc.).
 
 /// Controls how the pool creates raw byte buffers.
 ///
 /// # Contract
 ///
-/// - `allocate(capacity)` must return a `Vec<u8>` with `capacity() >= capacity`.
-/// - The returned `Vec` must have `len() == 0`.
+/// - `allocate(capacity)` must return a `Vec<u8>` with `len() >= capacity`.
+/// - The first `capacity` bytes must be initialized to zero.
+/// - The returned `Vec` must have `capacity() >= len()`.
 /// - The `Vec` must be deallocatable by the standard global allocator.
 ///
 /// # Example
@@ -21,30 +22,27 @@
 ///
 /// impl Allocator for PrefaultAllocator {
 ///     fn allocate(&self, capacity: usize) -> Vec<u8> {
-///         let mut buf = Vec::with_capacity(capacity);
-///         buf.resize(capacity, 0); // pre-fault pages
-///         buf.clear();
-///         buf
+///         vec![0; capacity]
 ///     }
 /// }
 ///
 /// let pool = ZeroPool::new().allocator(PrefaultAllocator);
 /// ```
 pub trait Allocator: Send + Sync + 'static {
-    /// Allocate a buffer with at least `capacity` bytes.
+    /// Allocate a zero-initialized buffer with at least `capacity` bytes.
     fn allocate(&self, capacity: usize) -> Vec<u8>;
 }
 
-/// Standard heap allocation via `Vec::with_capacity`.
+/// Standard heap allocation via `vec![0; capacity]`.
 ///
-/// This is the default — zero-sized, no overhead.
+/// This is the default safe allocator used by [`ZeroPool`](crate::ZeroPool).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HeapAllocator;
 
 impl Allocator for HeapAllocator {
     #[inline]
     fn allocate(&self, capacity: usize) -> Vec<u8> {
-        Vec::with_capacity(capacity)
+        vec![0; capacity]
     }
 }
 

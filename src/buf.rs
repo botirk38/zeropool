@@ -2,7 +2,9 @@
 
 use std::fmt;
 use std::io;
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
+use std::ptr;
 
 use crate::ZeroPool;
 
@@ -28,6 +30,18 @@ use crate::ZeroPool;
 /// }
 /// ```
 pub struct Buf<'a> {
+    buffer: Option<Vec<u8>>,
+    pool: &'a ZeroPool,
+    class_idx: u8,
+}
+
+/// An allocated byte buffer whose contents are not guaranteed to be initialized.
+///
+/// `BufUninit` is the high-performance counterpart to [`Buf`]. It never
+/// dereferences to `[u8]`, so safe code cannot read recycled or uninitialized
+/// bytes. Initialize every byte, then convert it to [`Buf`] with
+/// [`write_from_slice`](Self::write_from_slice) or [`assume_init`](Self::assume_init).
+pub struct BufUninit<'a> {
     buffer: Option<Vec<u8>>,
     pool: &'a ZeroPool,
     class_idx: u8,
@@ -112,6 +126,83 @@ impl<'a> Buf<'a> {
     }
 }
 
+impl BufUninit<'_> {
+    #[inline(always)]
+    fn vec(&self) -> &Vec<u8> {
+        // SAFETY: buffer is always Some during public lifetime.
+        unsafe { self.buffer.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline(always)]
+    fn vec_mut(&mut self) -> &mut Vec<u8> {
+        // SAFETY: buffer is always Some during public lifetime.
+        unsafe { self.buffer.as_mut().unwrap_unchecked() }
+    }
+}
+
+impl<'a> BufUninit<'a> {
+    pub(crate) fn new(buffer: Vec<u8>, pool: &'a ZeroPool, class_idx: u8) -> Self {
+        Self { buffer: Some(buffer), pool, class_idx }
+    }
+
+    /// Returns the number of bytes that must be initialized before conversion.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.vec().len()
+    }
+
+    /// Returns the capacity of the underlying allocation.
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.vec().capacity()
+    }
+
+    /// Returns `true` if this buffer has a length of 0.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.vec().is_empty()
+    }
+
+    /// Returns the buffer contents as maybe-uninitialized bytes.
+    #[inline]
+    pub fn as_uninit_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        let len = self.len();
+        // SAFETY: `MaybeUninit<u8>` may hold any byte state. The returned slice
+        // covers exactly the visible range tracked by this `BufUninit`.
+        unsafe { std::slice::from_raw_parts_mut(self.vec_mut().as_mut_ptr().cast(), len) }
+    }
+
+    /// Initialize the whole buffer from a same-length byte slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `data.len() != self.len()`.
+    #[must_use]
+    pub fn write_from_slice(mut self, data: &[u8]) -> Buf<'a> {
+        assert_eq!(data.len(), self.len(), "source slice length must match buffer length");
+        if !data.is_empty() {
+            // SAFETY: source and destination are valid for `data.len()` bytes.
+            // `self` owns the destination allocation, so it cannot overlap `data`.
+            unsafe {
+                ptr::copy_nonoverlapping(data.as_ptr(), self.vec_mut().as_mut_ptr(), data.len());
+            };
+        }
+        // SAFETY: every byte in the visible range was just initialized.
+        unsafe { self.assume_init() }
+    }
+
+    /// Convert to [`Buf`] after the caller has initialized every byte.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure all bytes in `0..self.len()` have been initialized.
+    #[must_use]
+    pub unsafe fn assume_init(mut self) -> Buf<'a> {
+        let buffer = self.buffer.take().expect("BufUninit already consumed");
+        Buf::new(buffer, self.pool, self.class_idx)
+    }
+}
+
 // ── Deref to [u8], not Vec<u8> ─────────────────────────────────────────
 
 impl Deref for Buf<'_> {
@@ -139,9 +230,27 @@ impl Drop for Buf<'_> {
     }
 }
 
+impl Drop for BufUninit<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Some(buffer) = self.buffer.take() {
+            self.pool.dealloc(buffer, self.class_idx);
+        }
+    }
+}
+
 impl fmt::Debug for Buf<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Buf")
+            .field("len", &self.len())
+            .field("capacity", &self.capacity())
+            .finish()
+    }
+}
+
+impl fmt::Debug for BufUninit<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufUninit")
             .field("len", &self.len())
             .field("capacity", &self.capacity())
             .finish()
@@ -297,5 +406,27 @@ mod tests {
         let mut buf = pool.alloc(0);
         buf.write_all(b"hello").unwrap();
         assert_eq!(&*buf, b"hello");
+    }
+
+    #[test]
+    fn test_uninit_write_from_slice() {
+        let pool = ZeroPool::new();
+        let buf = pool.alloc_uninit(5).write_from_slice(b"hello");
+
+        assert_eq!(&*buf, b"hello");
+    }
+
+    #[test]
+    fn test_uninit_as_uninit_mut() {
+        let pool = ZeroPool::new();
+        let mut buf = pool.alloc_uninit(3);
+        let uninit = buf.as_uninit_mut();
+        uninit[0].write(b'a');
+        uninit[1].write(b'b');
+        uninit[2].write(b'c');
+
+        // SAFETY: all three bytes were initialized above.
+        let buf = unsafe { buf.assume_init() };
+        assert_eq!(&*buf, b"abc");
     }
 }

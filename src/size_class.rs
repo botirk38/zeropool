@@ -158,16 +158,28 @@ impl SizeClass {
         }
     }
 
-    /// Resize a recycled buffer to the requested length.
+    /// Resize a recycled buffer to the requested length and zero exposed bytes.
     #[inline(always)]
-    pub fn resize(buf: &mut Vec<u8>, requested_len: usize) {
+    pub fn resize_zeroed(buf: &mut Vec<u8>, requested_len: usize) {
         debug_assert!(
             requested_len <= buf.capacity(),
             "requested_len ({requested_len}) > capacity ({})",
             buf.capacity(),
         );
-        // SAFETY: requested_len ≤ capacity (asserted above in debug,
-        // guaranteed by class routing in release). All u8 patterns valid.
+        buf.resize(requested_len, 0);
+    }
+
+    /// Resize a recycled buffer without initializing newly exposed bytes.
+    #[inline(always)]
+    pub fn resize_uninit(buf: &mut Vec<u8>, requested_len: usize) {
+        debug_assert!(
+            requested_len <= buf.capacity(),
+            "requested_len ({requested_len}) > capacity ({})",
+            buf.capacity(),
+        );
+        // SAFETY: requested_len <= capacity (asserted above in debug,
+        // guaranteed by class routing in release). `BufUninit` prevents safe
+        // reads until callers initialize the visible range.
         unsafe { buf.set_len(requested_len) };
     }
 
