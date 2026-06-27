@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img">
+    <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#020617" />
+            <stop offset="58%" stop-color="#111827" />
+            <stop offset="100%" stop-color="#1e1b4b" />
+        </linearGradient>
+        <linearGradient id="barSheen" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#ffffff" />
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+        </linearGradient>
+        <style>
+            text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+            .title { fill: #f8fafc; font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }
+            .subtitle { fill: #94a3b8; font-size: 15px; font-weight: 500; }
+            .axis-label { fill: #cbd5e1; font-size: 13px; font-weight: 600; }
+            .axis-title { fill: #94a3b8; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+            .legend { fill: #e2e8f0; font-size: 14px; font-weight: 700; }
+            .value { fill: #f8fafc; font-size: 14px; font-weight: 800; }
+            .grid { stroke: #334155; stroke-width: 1; opacity: 0.65; }
+            .axis { stroke: #64748b; stroke-width: 1.4; }
+        </style>
+    </defs>
+
+        <rect x="0" y="0" width="1120" height="560" rx="30" fill="url(#bg)" />
+        <circle cx="150" cy="450" r="180" fill="#7c3aed" opacity="0.14" />
+        <circle cx="1010" cy="80" r="190" fill="#06b6d4" opacity="0.12" />
+        <rect x="24" y="24" width="1072" height="512" rx="24" fill="#0f172a" opacity="0.76" stroke="#334155" />
+        <text x="56" y="66" class="title">Single-Thread Hot Path</text>
+        <text x="56" y="92" class="subtitle">64 KiB alloc/drop, no page writes, lower is better</text>
+        <line x1="90" y1="452.0" x2="1058" y2="452.0" class="grid" /><text x="72" y="457.0" class="axis-label" text-anchor="end">0 ns</text><line x1="90" y1="367.0" x2="1058" y2="367.0" class="grid" /><text x="72" y="372.0" class="axis-label" text-anchor="end">12.5 ns</text><line x1="90" y1="282.0" x2="1058" y2="282.0" class="grid" /><text x="72" y="287.0" class="axis-label" text-anchor="end">25 ns</text><line x1="90" y1="197.0" x2="1058" y2="197.0" class="grid" /><text x="72" y="202.0" class="axis-label" text-anchor="end">37.5 ns</text><line x1="90" y1="112.0" x2="1058" y2="112.0" class="grid" /><text x="72" y="117.0" class="axis-label" text-anchor="end">50 ns</text>
+        <line x1="90" y1="112" x2="90" y2="452" class="axis" />
+        <line x1="90" y1="452" x2="1058" y2="452" class="axis" />
+        <text x="28" y="282.0" class="axis-title" transform="rotate(-90 28 282.0)" text-anchor="middle">Time</text>
+        <rect x="90.0" y="348.6" width="172.8" height="103.4" rx="14" fill="#06b6d4" /><rect x="90.0" y="348.6" width="172.8" height="103.4" rx="14" fill="url(#barSheen)" opacity="0.38" /><text x="176.4" y="334.6" class="value" text-anchor="middle">15.2 ns</text><text x="176.4" y="512" class="axis-label" text-anchor="middle">opool</text><rect x="288.8" y="314.6" width="172.8" height="137.4" rx="14" fill="#7c3aed" /><rect x="288.8" y="314.6" width="172.8" height="137.4" rx="14" fill="url(#barSheen)" opacity="0.38" /><text x="375.2" y="300.6" class="value" text-anchor="middle">20.2 ns</text><text x="375.2" y="512" class="axis-label" text-anchor="middle">ZeroPool</text><rect x="487.6" y="308.5" width="172.8" height="143.5" rx="14" fill="#f59e0b" /><rect x="487.6" y="308.5" width="172.8" height="143.5" rx="14" fill="url(#barSheen)" opacity="0.38" /><text x="574.0" y="294.5" class="value" text-anchor="middle">21.1 ns</text><text x="574.0" y="512" class="axis-label" text-anchor="middle">object_pool</text><rect x="686.4" y="140.6" width="172.8" height="311.4" rx="14" fill="#64748b" /><rect x="686.4" y="140.6" width="172.8" height="311.4" rx="14" fill="url(#barSheen)" opacity="0.38" /><text x="772.8" y="126.6" class="value" text-anchor="middle">45.8 ns</text><text x="772.8" y="512" class="axis-label" text-anchor="middle">bytes</text><rect x="885.2" y="149.4" width="172.8" height="302.6" rx="14" fill="#ef4444" /><rect x="885.2" y="149.4" width="172.8" height="302.6" rx="14" fill="url(#barSheen)" opacity="0.38" /><text x="971.6" y="135.4" class="value" text-anchor="middle">44.5 ns</text><text x="971.6" y="512" class="axis-label" text-anchor="middle">Vec</text>
+
+</svg>

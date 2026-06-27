@@ -1,0 +1,14 @@
+[project]
+name = "zeropool-scripts"
+version = "0.1.0"
+description = "Maintenance scripts for ZeroPool benchmarks and README charts"
+readme = "README.md"
+authors = [
+    { name = "Botir Khaltaev", email = "ZLAC172@live.rhul.ac.uk" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
