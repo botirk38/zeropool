@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -42,11 +48,11 @@ class BarChart:
 
 
 PALETTE = {
-    "zeropool": "#7c3aed",
-    "vec": "#ef4444",
-    "opool": "#06b6d4",
-    "object_pool": "#f59e0b",
-    "bytes": "#64748b",
+    "zeropool": "#5B5FEF",
+    "vec": "#EF4444",
+    "opool": "#06B6D4",
+    "object_pool": "#F59E0B",
+    "bytes": "#64748B",
 }
 
 
@@ -75,8 +81,8 @@ CURRENT_HOT_PATH = BarChart(
         ("opool", 15.2, PALETTE["opool"]),
         ("ZeroPool", 20.2, PALETTE["zeropool"]),
         ("object_pool", 21.1, PALETTE["object_pool"]),
-        ("bytes", 45.8, PALETTE["bytes"]),
         ("Vec", 44.5, PALETTE["vec"]),
+        ("bytes", 45.8, PALETTE["bytes"]),
     ],
     output="hot-path.svg",
     unit="ns",
@@ -86,7 +92,7 @@ CURRENT_HOT_PATH = BarChart(
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="bench.py",
-        description="Run Criterion benchmarks and optionally generate polished SVG charts.",
+        description="Run Criterion benchmarks and optionally generate SVG charts.",
     )
     parser.add_argument(
         "--filter",
@@ -216,8 +222,8 @@ def load_hot_path(root: Path) -> BarChart | None:
         ("opool", "opool", PALETTE["opool"]),
         ("ZeroPool", "zeropool", PALETTE["zeropool"]),
         ("object_pool", "object_pool", PALETTE["object_pool"]),
-        ("bytes", "bytes", PALETTE["bytes"]),
         ("Vec", "vec_capacity", PALETTE["vec"]),
+        ("bytes", "bytes", PALETTE["bytes"]),
     ]
     bars = []
     for label, slug, color in specs:
@@ -247,201 +253,126 @@ def read_mean_ns(path: Path) -> float | None:
 
 
 def write_line_chart(chart: LineChart, path: Path) -> None:
-    width = 1120
-    height = 620
-    left = 86
-    right = 260
-    top = 108
-    bottom = 92
-    plot_width = width - left - right
-    plot_height = height - top - bottom
-    max_value = nice_max(max(value for series in chart.series for value in series.values))
-    ticks = [max_value * i / 4 for i in range(5)]
+    plt.rcParams.update(rc_params())
+    fig, ax = plt.subplots(figsize=(11.2, 6.2), constrained_layout=True)
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#ffffff")
 
-    def x_at(index: int) -> float:
-        if len(chart.x_values) == 1:
-            return left + plot_width / 2
-        return left + index * plot_width / (len(chart.x_values) - 1)
-
-    def y_at(value: float) -> float:
-        return top + plot_height - (value / max_value) * plot_height
-
-    grid = []
-    for tick in ticks:
-        y = y_at(tick)
-        grid.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_width}" y2="{y:.1f}" class="grid" />'
+    x = [int(value) for value in chart.x_values]
+    for series in chart.series:
+        linewidth = 3.2 if series.name == "ZeroPool" else 2.2
+        zorder = 5 if series.name == "ZeroPool" else 3
+        ax.plot(
+            x,
+            series.values,
+            marker="o",
+            markersize=7,
+            linewidth=linewidth,
+            color=series.color,
+            label=series.name,
+            zorder=zorder,
         )
-        grid.append(
-            f'<text x="{left - 18}" y="{y + 5:.1f}" class="axis-label" text-anchor="end">{format_tick(tick)} {chart.unit}</text>'
-        )
-
-    x_labels = []
-    for index, label in enumerate(chart.x_values):
-        x = x_at(index)
-        x_labels.append(
-            f'<text x="{x:.1f}" y="{height - 46}" class="axis-label" text-anchor="middle">{label}</text>'
-        )
-
-    series_svg = []
-    legend = []
-    for series_index, series in enumerate(chart.series):
-        points = [(x_at(i), y_at(v)) for i, v in enumerate(series.values)]
-        path_data = " ".join(
-            f'{"M" if i == 0 else "L"} {x:.1f} {y:.1f}' for i, (x, y) in enumerate(points)
-        )
-        area_data = (
-            f"M {points[0][0]:.1f} {top + plot_height:.1f} "
-            + " ".join(f"L {x:.1f} {y:.1f}" for x, y in points)
-            + f" L {points[-1][0]:.1f} {top + plot_height:.1f} Z"
-        )
-        opacity = 0.10 if series.name == "ZeroPool" else 0.045
-        series_svg.append(
-            f'<path d="{area_data}" fill="{series.color}" opacity="{opacity}" />'
-        )
-        series_svg.append(
-            f'<path d="{path_data}" fill="none" stroke="{series.color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />'
-        )
-        for x, y in points:
-            series_svg.append(
-                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="#0f172a" stroke="{series.color}" stroke-width="4" />'
+        for point_x, point_y in zip(x, series.values, strict=True):
+            ax.annotate(
+                f"{format_value(point_y)} {chart.unit}",
+                (point_x, point_y),
+                xytext=(0, 9),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8.5,
+                color="#334155",
             )
-        legend_y = top + 24 + series_index * 34
-        legend.append(
-            f'<circle cx="{left + plot_width + 56}" cy="{legend_y}" r="6" fill="{series.color}" />'
-            f'<text x="{left + plot_width + 74}" y="{legend_y + 5}" class="legend">{escape(series.name)}</text>'
-        )
 
-    svg = svg_shell(
-        width,
-        height,
-        f"""
-        <rect x="0" y="0" width="{width}" height="{height}" rx="30" fill="url(#bg)" />
-        <circle cx="940" cy="60" r="190" fill="#7c3aed" opacity="0.16" />
-        <circle cx="1040" cy="510" r="210" fill="#06b6d4" opacity="0.12" />
-        <rect x="24" y="24" width="{width - 48}" height="{height - 48}" rx="24" fill="#0f172a" opacity="0.76" stroke="#334155" />
-        <text x="56" y="66" class="title">{escape(chart.title)}</text>
-        <text x="56" y="92" class="subtitle">{escape(chart.subtitle)}</text>
-        {''.join(grid)}
-        <line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" class="axis" />
-        <line x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}" class="axis" />
-        {''.join(x_labels)}
-        <text x="{left + plot_width / 2:.1f}" y="{height - 18}" class="axis-title" text-anchor="middle">{escape(chart.x_label)}</text>
-        <text x="28" y="{top + plot_height / 2:.1f}" class="axis-title" transform="rotate(-90 28 {top + plot_height / 2:.1f})" text-anchor="middle">{escape(chart.y_label)}</text>
-        {''.join(series_svg)}
-        <rect x="{left + plot_width + 28}" y="{top - 8}" width="198" height="{len(chart.series) * 34 + 28}" rx="16" fill="#020617" opacity="0.44" stroke="#334155" />
-        {''.join(legend)}
-        """,
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xlabel(chart.x_label)
+    ax.set_ylabel(f"{chart.y_label} ({chart.unit}, log scale)")
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: format_value(value)))
+    ax.grid(axis="y", color="#E2E8F0", linewidth=1.0)
+    ax.grid(axis="x", visible=False)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_color("#CBD5E1")
+    ax.tick_params(colors="#475569")
+    ax.legend(
+        loc="upper left",
+        bbox_to_anchor=(0, 1.02),
+        ncols=4,
+        frameon=False,
+        fontsize=10,
+        handlelength=2.8,
     )
-    path.write_text(clean_svg(svg), encoding="utf-8")
+    add_titles(fig, chart.title, chart.subtitle)
+    add_footer(fig, "Source: README benchmark snapshot. Detailed methodology in BENCHMARKS.md.")
+    fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None})
+    plt.close(fig)
+    clean_file(path)
 
 
 def write_bar_chart(chart: BarChart, path: Path) -> None:
-    width = 1120
-    height = 560
-    left = 90
-    right = 62
-    top = 112
-    bottom = 108
-    plot_width = width - left - right
-    plot_height = height - top - bottom
-    max_value = nice_max(max(value for _, value, _ in chart.bars))
-    bar_gap = 26
-    bar_width = (plot_width - bar_gap * (len(chart.bars) - 1)) / len(chart.bars)
-    ticks = [max_value * i / 4 for i in range(5)]
+    plt.rcParams.update(rc_params())
+    fig, ax = plt.subplots(figsize=(11.2, 5.6), constrained_layout=True)
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#ffffff")
 
-    grid = []
-    for tick in ticks:
-        y = top + plot_height - (tick / max_value) * plot_height
-        grid.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_width}" y2="{y:.1f}" class="grid" />'
-        )
-        grid.append(
-            f'<text x="{left - 18}" y="{y + 5:.1f}" class="axis-label" text-anchor="end">{format_tick(tick)} {chart.unit}</text>'
-        )
+    labels = [label for label, _, _ in chart.bars]
+    values = [value for _, value, _ in chart.bars]
+    colors = [color for _, _, color in chart.bars]
+    y = range(len(labels))
+    ax.barh(y, values, color=colors, height=0.56)
+    ax.set_yticks(y, labels)
+    ax.invert_yaxis()
+    ax.set_xlabel(f"{chart.y_label} ({chart.unit})")
+    ax.grid(axis="x", color="#E2E8F0", linewidth=1.0)
+    ax.grid(axis="y", visible=False)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color("#CBD5E1")
+    ax.tick_params(axis="x", colors="#475569")
+    ax.tick_params(axis="y", colors="#0F172A", length=0)
 
-    bars = []
-    for index, (label, value, color) in enumerate(chart.bars):
-        x = left + index * (bar_width + bar_gap)
-        bar_height = (value / max_value) * plot_height
-        y = top + plot_height - bar_height
-        bars.append(
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" height="{bar_height:.1f}" rx="14" fill="{color}" />'
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" height="{bar_height:.1f}" rx="14" fill="url(#barSheen)" opacity="0.38" />'
-            f'<text x="{x + bar_width / 2:.1f}" y="{y - 14:.1f}" class="value" text-anchor="middle">{format_tick(value)} {chart.unit}</text>'
-            f'<text x="{x + bar_width / 2:.1f}" y="{height - 48}" class="axis-label" text-anchor="middle">{escape(label)}</text>'
+    max_value = max(values)
+    for index, value in enumerate(values):
+        ax.text(
+            value + max_value * 0.025,
+            index,
+            f"{format_value(value)} {chart.unit}",
+            va="center",
+            ha="left",
+            fontsize=10,
+            color="#334155",
+            fontweight="bold",
         )
 
-    svg = svg_shell(
-        width,
-        height,
-        f"""
-        <rect x="0" y="0" width="{width}" height="{height}" rx="30" fill="url(#bg)" />
-        <circle cx="150" cy="450" r="180" fill="#7c3aed" opacity="0.14" />
-        <circle cx="1010" cy="80" r="190" fill="#06b6d4" opacity="0.12" />
-        <rect x="24" y="24" width="{width - 48}" height="{height - 48}" rx="24" fill="#0f172a" opacity="0.76" stroke="#334155" />
-        <text x="56" y="66" class="title">{escape(chart.title)}</text>
-        <text x="56" y="92" class="subtitle">{escape(chart.subtitle)}</text>
-        {''.join(grid)}
-        <line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" class="axis" />
-        <line x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}" class="axis" />
-        <text x="28" y="{top + plot_height / 2:.1f}" class="axis-title" transform="rotate(-90 28 {top + plot_height / 2:.1f})" text-anchor="middle">{escape(chart.y_label)}</text>
-        {''.join(bars)}
-        """,
-    )
-    path.write_text(clean_svg(svg), encoding="utf-8")
+    ax.set_xlim(0, max_value * 1.18)
+    add_titles(fig, chart.title, chart.subtitle)
+    add_footer(fig, "Source: README benchmark snapshot. Detailed methodology in BENCHMARKS.md.")
+    fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None})
+    plt.close(fig)
+    clean_file(path)
 
 
-def svg_shell(width: int, height: int, body: str) -> str:
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">
-    <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#020617" />
-            <stop offset="58%" stop-color="#111827" />
-            <stop offset="100%" stop-color="#1e1b4b" />
-        </linearGradient>
-        <linearGradient id="barSheen" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#ffffff" />
-            <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
-        </linearGradient>
-        <style>
-            text {{ font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-            .title {{ fill: #f8fafc; font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }}
-            .subtitle {{ fill: #94a3b8; font-size: 15px; font-weight: 500; }}
-            .axis-label {{ fill: #cbd5e1; font-size: 13px; font-weight: 600; }}
-            .axis-title {{ fill: #94a3b8; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }}
-            .legend {{ fill: #e2e8f0; font-size: 14px; font-weight: 700; }}
-            .value {{ fill: #f8fafc; font-size: 14px; font-weight: 800; }}
-            .grid {{ stroke: #334155; stroke-width: 1; opacity: 0.65; }}
-            .axis {{ stroke: #64748b; stroke-width: 1.4; }}
-        </style>
-    </defs>
-    {body}
-</svg>
-"""
+def rc_params() -> dict[str, object]:
+    return {
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Inter", "DejaVu Sans", "Arial", "sans-serif"],
+        "axes.labelcolor": "#475569",
+        "axes.labelsize": 11,
+        "axes.titleweight": "bold",
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "svg.fonttype": "none",
+    }
 
 
-def clean_svg(svg: str) -> str:
-    return "\n".join(line.rstrip() for line in svg.splitlines()) + "\n"
+def add_titles(fig: plt.Figure, title: str, subtitle: str) -> None:
+    fig.suptitle(title, x=0.01, y=1.04, ha="left", fontsize=22, fontweight="bold", color="#0F172A")
+    fig.text(0.01, 0.985, subtitle, ha="left", va="top", fontsize=11, color="#64748B")
 
 
-def nice_max(value: float) -> float:
-    if value <= 0:
-        return 1
-    exponent = math.floor(math.log10(value))
-    fraction = value / 10**exponent
-    if fraction <= 1:
-        nice = 1
-    elif fraction <= 2:
-        nice = 2
-    elif fraction <= 5:
-        nice = 5
-    else:
-        nice = 10
-    return nice * 10**exponent
+def add_footer(fig: plt.Figure, text: str) -> None:
+    fig.text(0.01, -0.015, text, ha="left", va="bottom", fontsize=8.5, color="#94A3B8")
 
 
-def format_tick(value: float) -> str:
+def format_value(value: float) -> str:
     if value >= 100:
         return f"{value:,.0f}"
     if value >= 10:
@@ -449,13 +380,9 @@ def format_tick(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
-def escape(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+def clean_file(path: Path) -> None:
+    svg = path.read_text(encoding="utf-8")
+    path.write_text("\n".join(line.rstrip() for line in svg.splitlines()) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

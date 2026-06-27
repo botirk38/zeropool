@@ -7,7 +7,9 @@ authors = [
     { name = "Botir Khaltaev", email = "ZLAC172@live.rhul.ac.uk" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "matplotlib>=3.11.0",
+]
 
 [build-system]
 requires = ["hatchling"]

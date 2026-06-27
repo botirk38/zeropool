@@ -125,26 +125,11 @@ Every "realistic" benchmark writes to every page of the buffer, paying the page-
 
 ![Realistic 64 KiB write benchmark chart](./docs/assets/realistic-write-mt.svg)
 
-| Threads | ZeroPool | `Vec` | `opool` | `object_pool` |
-|---------|---------:|------:|--------:|--------------:|
-| 2       |  35 us   | 272 us | 40 us  |  45 us |
-| 4       |  54 us   | 299 us | 84 us  | 102 us |
-| 8       |  89 us   | 388 us | 199 us | 295 us |
-| 16      | 157 us   | 624 us | 371 us | 1,476 us |
-
 ZeroPool is **4x-8x faster** than raw `Vec` and scales linearly while `object_pool` collapses under contention.
 
 ### Single-thread hot path (no page writes, 64 KiB)
 
 ![Single-thread hot path benchmark chart](./docs/assets/hot-path.svg)
-
-| Crate | Time |
-|---|---:|
-| `opool` | 15.2 ns |
-| **ZeroPool** | 20.2 ns |
-| `object_pool` | 21.1 ns |
-| `bytes::BytesMut` | 45.8 ns |
-| `Vec::with_capacity` | 44.5 ns |
 
 `opool` wins single-thread microbenchmarks by ~5 ns. ZeroPool wins everywhere else.
 

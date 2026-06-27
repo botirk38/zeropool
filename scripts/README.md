@@ -27,4 +27,4 @@ Supported chart inputs today:
 - `realistic_write_mt/*/*/base/estimates.json`
 - `hot_path/*/65536/base/estimates.json`
 
-The chart generator is dependency-free and writes static SVG files suitable for GitHub README rendering.
+The chart generator uses Matplotlib and writes static SVG files suitable for GitHub README rendering.
