@@ -39,6 +39,7 @@ static GLOBAL: tcmalloc_better::TCMalloc = tcmalloc_better::TCMalloc;
 #[cfg(all(
     not(feature = "bench-alloc-mimalloc"),
     any(not(feature = "bench-alloc-tcmalloc"), not(target_os = "linux")),
+    unix,
     feature = "bench-alloc-jemalloc"
 ))]
 #[global_allocator]
