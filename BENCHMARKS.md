@@ -16,7 +16,7 @@ your `lscpu`, `rustc --version`, and the exact `cargo bench` command.
 | OS | Linux |
 | Rust | stable |
 | Criterion | 0.7 |
-| Build | `cargo bench --features bench` (release) |
+| Build | `cargo bench --bench pool --features bench` (release) |
 
 ## Methodology
 
@@ -26,10 +26,22 @@ your `lscpu`, `rustc --version`, and the exact `cargo bench` command.
 - All **hot_path** benchmarks are pure allocation / drop with no page writes.
   `alloc()` measures the safe zero-initialized path; `alloc_uninit()` measures
   the explicit full-overwrite fast path.
+- **full_overwrite** initializes every byte after allocation. This is the fair
+  workload for explicit capacity/uninitialized APIs because callers never read
+  stale bytes.
+- `vec_reuse_*` cases measure application-level `Vec` retention separately from
+  allocator-local caching. They answer whether a caller can get close to pooling
+  by keeping a reusable vector per worker.
 - Each Criterion group runs at least 30 samples (50+ for write workloads)
   with default warm-up.
 - Comparison crates are pulled in only with `--features bench` so the
   default `cargo add zeropool` does not download them.
+- Global allocators are selected by Cargo feature for the `pool` bench. Rust
+  allows one process-wide `#[global_allocator]`, so `mimalloc`, `tcmalloc`,
+  `jemalloc`, and the system allocator must be measured in separate runs. Enable
+  only one `bench-alloc-*` feature for a real measurement. The tcmalloc backend
+  uses `tcmalloc-better` and is Linux-only; on other targets that feature leaves
+  the system allocator in place.
 
 ## Headline result
 
@@ -144,19 +156,25 @@ production hot paths.
 
 ```bash
 # Full suite, comparison crates included
-cargo bench --features bench
+cargo bench --bench pool --features bench
+
+# Same suite under alternative process-wide global allocators
+cargo bench --bench pool --features bench,bench-alloc-mimalloc
+cargo bench --bench pool --features bench,bench-alloc-tcmalloc
+cargo bench --bench pool --features bench,bench-alloc-jemalloc
 
 # Single groups
-cargo bench -- hot_path
-cargo bench -- realistic
-cargo bench -- scale
-cargo bench -- mixed
-cargo bench -- burst
-cargo bench -- contention
-cargo bench -- stats
+cargo bench --bench pool -- hot_path
+cargo bench --bench pool -- realistic
+cargo bench --bench pool -- full_overwrite
+cargo bench --bench pool -- scale
+cargo bench --bench pool -- mixed
+cargo bench --bench pool -- burst
+cargo bench --bench pool -- contention
+cargo bench --bench pool -- stats
 
 # Increase the sustained workload from 10k → 100k ops/thread
-ZEROPOOL_SCALE_OPS=100000 cargo bench --features bench -- scale
+ZEROPOOL_SCALE_OPS=100000 cargo bench --bench pool --features bench -- scale
 ```
 
 Criterion writes machine-readable `estimates.json` files under
