@@ -1,24 +1,48 @@
-//! Criterion benchmark suite for ZeroPool.
-//!
-//! Run a subset:
-//!
-//! ```text
-//! cargo bench -- hot_path
-//! cargo bench -- realistic
-//! cargo bench -- scale
-//! cargo bench -- mixed
-//! cargo bench -- burst
-//! cargo bench -- contention
-//! cargo bench -- stats
-//! ```
-//!
-//! Run with full comparison crates (opool, object_pool, sharded_slab, bytes):
-//!
-//! ```text
-//! cargo bench --features bench
-//! ```
-
 #![allow(missing_docs)]
+
+// Criterion benchmark suite for ZeroPool.
+//
+// Run a subset:
+//
+// ```text
+// cargo bench -- hot_path
+// cargo bench -- realistic
+// cargo bench -- full_overwrite
+// cargo bench -- scale
+// cargo bench -- mixed
+// cargo bench -- burst
+// cargo bench -- contention
+// cargo bench -- stats
+// ```
+//
+// Run with full comparison crates (opool, object_pool, sharded_slab, bytes):
+//
+// ```text
+// cargo bench --bench pool --features bench
+// cargo bench --bench pool --features bench,bench-alloc-mimalloc
+// cargo bench --bench pool --features bench,bench-alloc-tcmalloc
+// cargo bench --bench pool --features bench,bench-alloc-jemalloc
+// ```
+
+#[cfg(feature = "bench-alloc-mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(
+    not(feature = "bench-alloc-mimalloc"),
+    target_os = "linux",
+    feature = "bench-alloc-tcmalloc"
+))]
+#[global_allocator]
+static GLOBAL: tcmalloc_better::TCMalloc = tcmalloc_better::TCMalloc;
+
+#[cfg(all(
+    not(feature = "bench-alloc-mimalloc"),
+    any(not(feature = "bench-alloc-tcmalloc"), not(target_os = "linux")),
+    feature = "bench-alloc-jemalloc"
+))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod common;
 
@@ -31,7 +55,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use common::sizes::{
     BURST_SIZES, MIXED_SIZES, SCALE_THREAD_COUNTS, SIZES, THREAD_COUNTS, ZIPF_SIZES,
 };
-use common::touch::touch_pages;
+use common::touch::{touch_pages, write_all, write_all_uninit};
 
 use zeropool::ZeroPool;
 
@@ -75,6 +99,23 @@ fn hot_path(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("vec_capacity", size), &size, |b, &size| {
             b.iter(|| {
                 let buf = Vec::<u8>::with_capacity(size);
+                black_box(&buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("vec_reuse_capacity", size), &size, |b, &size| {
+            let mut buf = Vec::<u8>::with_capacity(size);
+            b.iter(|| {
+                buf.clear();
+                black_box(&buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("vec_reuse_zeroed", size), &size, |b, &size| {
+            let mut buf = vec![0u8; size];
+            b.iter(|| {
+                buf.clear();
+                buf.resize(size, 0);
                 black_box(&buf);
             });
         });
@@ -133,6 +174,15 @@ fn realistic(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new("vec_alloc", size), &size, |b, &size| {
                 b.iter(|| {
                     let mut buf = vec![0u8; size];
+                    touch_pages(&mut buf);
+                });
+            });
+
+            group.bench_with_input(BenchmarkId::new("vec_reuse", size), &size, |b, &size| {
+                let mut buf = vec![0u8; size];
+                b.iter(|| {
+                    buf.clear();
+                    buf.resize(size, 0);
                     touch_pages(&mut buf);
                 });
             });
@@ -210,6 +260,27 @@ fn realistic(c: &mut Criterion) {
                 },
             );
 
+            group.bench_with_input(
+                BenchmarkId::new("vec_thread_local_reuse", threads),
+                &threads,
+                |b, &threads| {
+                    b.iter(|| {
+                        thread::scope(|s| {
+                            for _ in 0..threads {
+                                s.spawn(|| {
+                                    let mut buf = vec![0u8; size];
+                                    for _ in 0..ops {
+                                        buf.clear();
+                                        buf.resize(size, 0);
+                                        touch_pages(&mut buf);
+                                    }
+                                });
+                            }
+                        });
+                    });
+                },
+            );
+
             #[cfg(feature = "bench")]
             {
                 group.bench_with_input(
@@ -258,6 +329,88 @@ fn realistic(c: &mut Criterion) {
 
         group.finish();
     }
+}
+
+// ── full_overwrite ─────────────────────────────────────────────────────
+//
+// Alloc + initialize every byte + drop. This is the fair workload for
+// explicit uninitialized/capacity APIs because callers never read old bytes.
+
+fn full_overwrite(c: &mut Criterion) {
+    let mut group = c.benchmark_group("full_overwrite");
+
+    for &size in SIZES {
+        group.throughput(Throughput::Bytes(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("zeropool_zeroed", size), &size, |b, &size| {
+            let pool = common::competitors::zeropool_no_min();
+            pool.warm(1, size);
+            b.iter(|| {
+                let mut buf = pool.alloc(size);
+                write_all(&mut buf);
+                drop(buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("zeropool_uninit", size), &size, |b, &size| {
+            let pool = common::competitors::zeropool_no_min();
+            pool.warm(1, size);
+            b.iter(|| {
+                let mut buf = pool.alloc_uninit(size);
+                write_all_uninit(buf.as_uninit_mut());
+                // SAFETY: `write_all_uninit` initialized the entire buffer.
+                let buf = unsafe { buf.assume_init() };
+                drop(buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("vec_zeroed", size), &size, |b, &size| {
+            b.iter(|| {
+                let mut buf = vec![0u8; size];
+                write_all(&mut buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("vec_capacity", size), &size, |b, &size| {
+            b.iter(|| {
+                let mut buf = Vec::<u8>::with_capacity(size);
+                write_all_uninit(&mut buf.spare_capacity_mut()[..size]);
+                // SAFETY: `write_all_uninit` initializes exactly `size` bytes.
+                unsafe { buf.set_len(size) };
+                black_box(&buf);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("vec_reuse_zeroed", size), &size, |b, &size| {
+            let mut buf = vec![0u8; size];
+            b.iter(|| {
+                buf.clear();
+                buf.resize(size, 0);
+                write_all(&mut buf);
+            });
+        });
+
+        #[cfg(feature = "bench")]
+        {
+            group.bench_with_input(BenchmarkId::new("object_pool", size), &size, |b, &size| {
+                let pool = common::competitors::object_pool_zeroed(size, 16);
+                b.iter(|| {
+                    let mut buf = pool.pull(|| vec![0u8; size]);
+                    write_all(&mut buf);
+                });
+            });
+
+            group.bench_with_input(BenchmarkId::new("opool", size), &size, |b, &size| {
+                let pool = common::competitors::opool_capacity(64, size);
+                b.iter(|| {
+                    let mut buf = pool.get();
+                    write_all(&mut buf);
+                });
+            });
+        }
+    }
+
+    group.finish();
 }
 
 // ── scale_sustained ───────────────────────────────────────────────────
@@ -656,6 +809,7 @@ criterion_group!(
     benches,
     hot_path,
     realistic,
+    full_overwrite,
     scale_sustained,
     mixed_sizes,
     burst,
