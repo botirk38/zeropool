@@ -41,7 +41,8 @@ your `lscpu`, `rustc --version`, and the exact `cargo bench` command.
   `jemalloc`, and the system allocator must be measured in separate runs. Enable
   only one `bench-alloc-*` feature for a real measurement. The tcmalloc backend
   uses `tcmalloc-better` and is Linux-only; on other targets that feature leaves
-  the system allocator in place.
+  the system allocator in place. The jemalloc backend is Unix-only for the same
+  reason; Windows CI can still run `--all-features` without compiling it.
 
 ## Headline result
 
